@@ -1,0 +1,242 @@
+/* Mokka Companion look for the psacc web UI.
+ *
+ * Dash auto-loads every CSS file in this folder, in alphabetical order, after
+ * the external Bootstrap stylesheet. The "zz_" prefix makes this load last so
+ * it wins over Bootstrap and the other asset CSS.
+ *
+ * The palette mirrors the Mokka Companion app (src/index.css): a dark page,
+ * gray-900 cards, gray-800 inputs, a violet-400 primary accent. Rules are kept
+ * version-agnostic (direct colours rather than Bootstrap's --bs-* variables)
+ * so they apply regardless of the exact Bootstrap build dbc ships.
+ */
+
+:root {
+  --mk-page: #030712; /* gray-950 */
+  --mk-surface: #111827; /* gray-900 */
+  --mk-input: #1f2937; /* gray-800 */
+  --mk-border: #374151; /* gray-700 */
+  --mk-strong: #ffffff;
+  --mk-muted: #9ca3af; /* gray-400 */
+  --mk-faint: #6b7280; /* gray-500 */
+  --mk-label: #d1d5db; /* gray-300 */
+  --mk-accent: #a78bfa; /* violet-400 */
+  --mk-accent-hover: #b9a6fb;
+  --mk-accent-active: #8f6ef7;
+  --mk-on-accent: #030712;
+  --mk-radius: 0.75rem;
+  --mk-radius-lg: 1rem;
+  --mk-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+/* ---- Page ---------------------------------------------------------------- */
+
+body {
+  background-color: var(--mk-page);
+  color: var(--mk-strong);
+  font-family: var(--mk-font);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--mk-strong);
+}
+
+a {
+  color: var(--mk-accent);
+}
+a:hover {
+  color: var(--mk-accent-hover);
+}
+
+/* ---- Buttons ------------------------------------------------------------- */
+
+.btn {
+  border-radius: var(--mk-radius);
+  font-weight: 500;
+}
+
+.btn-primary,
+.btn-info {
+  background-color: var(--mk-accent);
+  border-color: var(--mk-accent);
+  color: var(--mk-on-accent);
+}
+.btn-primary:hover,
+.btn-info:hover,
+.btn-primary:focus,
+.btn-info:focus {
+  background-color: var(--mk-accent-hover);
+  border-color: var(--mk-accent-hover);
+  color: var(--mk-on-accent);
+}
+.btn-primary:active,
+.btn-info:active,
+.btn-primary:disabled,
+.btn-info:disabled {
+  background-color: var(--mk-accent-active);
+  border-color: var(--mk-accent-active);
+  color: var(--mk-on-accent);
+  opacity: 0.4;
+}
+
+.btn-secondary,
+.btn-light {
+  background-color: var(--mk-input);
+  border-color: var(--mk-border);
+  color: var(--mk-label);
+}
+.btn-secondary:hover,
+.btn-light:hover {
+  background-color: var(--mk-border);
+  border-color: var(--mk-border);
+  color: var(--mk-strong);
+}
+
+/* ---- Form controls ------------------------------------------------------- */
+
+.form-label {
+  color: var(--mk-label);
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.form-text {
+  color: var(--mk-muted);
+}
+
+.form-control,
+.form-select {
+  background-color: var(--mk-input);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius);
+  color: var(--mk-strong);
+  padding: 0.65rem 0.9rem;
+}
+.form-control::placeholder {
+  color: var(--mk-faint);
+}
+.form-control:focus,
+.form-select:focus {
+  background-color: var(--mk-input);
+  border-color: var(--mk-accent);
+  box-shadow: 0 0 0 1px var(--mk-accent);
+  color: var(--mk-strong);
+}
+
+/* dcc.Dropdown (react-select) used for the Car Brand picker. */
+.dash-dropdown .Select-control,
+.Select-control {
+  background-color: var(--mk-input);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius);
+  color: var(--mk-strong);
+}
+.Select-placeholder,
+.Select--single > .Select-control .Select-value {
+  color: var(--mk-strong);
+  line-height: 36px;
+}
+.Select-value-label {
+  color: var(--mk-strong) !important;
+}
+.Select-menu-outer {
+  background-color: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius);
+  color: var(--mk-strong);
+}
+.Select-option {
+  background-color: var(--mk-surface);
+  color: var(--mk-label);
+}
+.Select-option.is-focused {
+  background-color: var(--mk-input);
+  color: var(--mk-strong);
+}
+.Select-input > input {
+  color: var(--mk-strong);
+}
+
+/* ---- Alerts (login/OTP result messages) --------------------------------- */
+
+.alert {
+  border-radius: var(--mk-radius);
+  border-width: 1px;
+}
+.alert-success {
+  background-color: #052e22;
+  border-color: #065f46;
+  color: #6ee7b7;
+}
+.alert-danger {
+  background-color: #450a0a;
+  border-color: #991b1b;
+  color: #fca5a5;
+}
+.alert-warning {
+  background-color: #451a03;
+  border-color: #92400e;
+  color: #fcd34d;
+}
+.alert-info {
+  background-color: #1e1b4b;
+  border-color: #4c1d95;
+  color: #c4b5fd;
+}
+
+/* ---- Tabs (Log / User config / OTP config) ------------------------------ */
+
+.nav-tabs {
+  border-bottom: 1px solid var(--mk-border);
+}
+.nav-tabs .nav-link {
+  color: var(--mk-muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+}
+.nav-tabs .nav-link:hover {
+  color: var(--mk-strong);
+  border-bottom-color: var(--mk-border);
+}
+.nav-tabs .nav-link.active {
+  color: var(--mk-strong);
+  background: transparent;
+  border-bottom: 2px solid var(--mk-accent);
+}
+
+/* ---- Cards -------------------------------------------------------------- */
+
+.card {
+  background-color: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius-lg);
+  color: var(--mk-strong);
+}
+
+/* ---- Mokka setup card ---------------------------------------------------- */
+
+/* Wraps the login + OTP forms (see config_views.py) to give them the centred
+ * card treatment the Mokka app uses, rather than Bootstrap's full-width rows. */
+.mokka-setup {
+  max-width: 28rem;
+  margin: 1.5rem auto;
+  padding: 1.5rem;
+  background-color: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius-lg);
+}
+.mokka-setup .mokka-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--mk-strong);
+  margin-bottom: 0.25rem;
+}
+.mokka-setup .mokka-subtitle {
+  font-size: 0.875rem;
+  color: var(--mk-muted);
+  margin-bottom: 1.25rem;
+}

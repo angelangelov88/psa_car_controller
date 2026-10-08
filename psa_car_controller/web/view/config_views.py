@@ -18,87 +18,96 @@ logger = logging.getLogger(__name__)
 app = PSACarController()
 INITIAL_SETUP: InitialSetup = None
 
-setup_config_layout = dbc.Row(dbc.Col(md=12, lg=2, className="m-3", children=[
-    dbc.Row(html.H2('Config')),
-    dbc.Row(className="ms-2", children=[
-        dbc.Form([
-            html.Div(className="mb-3", children=[
-                dbc.Label("Car Brand", html_for="psa-app"),
-                dcc.Dropdown(
-                    id="psa-app",
-                    options=[
-                        {"label": "Peugeot", "value": "com.psa.mym.mypeugeot"},
-                        {"label": "Opel", "value": "com.psa.mym.myopel"},
-                        {"label": "Citroën", "value": "com.psa.mym.mycitroen"},
-                        {"label": "DS", "value": "com.psa.mym.myds"},
-                        {"label": "Vauxhall", "value": "com.psa.mym.myvauxhall"}
-                    ],
-                )]),
-            html.Div(className="mb-3", children=[
-                dbc.Label("Email", html_for="psa-email"),
-                dbc.Input(type="email", id="psa-email", placeholder="Enter email"),
-                dbc.FormText(
-                    "PSA account email",
-                    color="secondary",
-                )]),
-            html.Div(className="mb-3", children=[
-                dbc.Label("Password", html_for="psa-password"),
-                dbc.Input(
-                    type="password",
-                    id="psa-password",
-                    placeholder="Enter password",
-                ),
-                dbc.FormText(
-                    "PSA account password",
-                    color="secondary",
-                )]),
-            html.Div(className="mb-3", children=[
-                dbc.Label("Country code", html_for="countrycode"),
-                dbc.Input(
-                    type="text",
-                    id="psa-countrycode",
-                    placeholder="Enter your country code",
-                ),
-                dbc.FormText(
-                    "Example: FR for FRANCE or GB for Great Britain...",
-                    color="secondary",
-                )]),
-            dbc.Row(dbc.Button("Submit", color="primary", id="submit-form")),
-            dbc.Row(dbc.FormText(
-                "After submit be patient it can take some time...",
-                color="secondary")),
-            dcc.Loading(
-                id="loading-2",
-                children=[html.Div([html.Div(id="form_result")])],
-                type="circle",
+setup_config_layout = html.Div(className="mokka-setup", children=[
+    html.Div("Connect your car", className="mokka-title"),
+    html.Div("Step 1 of 2 — sign in with your Vauxhall/Stellantis account. "
+             "These details stay on your psacc server and are never sent anywhere else.",
+             className="mokka-subtitle"),
+    dbc.Form([
+        html.Div(className="mb-3", children=[
+            dbc.Label("Car brand", html_for="psa-app"),
+            dcc.Dropdown(
+                id="psa-app",
+                options=[
+                    {"label": "Peugeot", "value": "com.psa.mym.mypeugeot"},
+                    {"label": "Opel", "value": "com.psa.mym.myopel"},
+                    {"label": "Citroën", "value": "com.psa.mym.mycitroen"},
+                    {"label": "DS", "value": "com.psa.mym.myds"},
+                    {"label": "Vauxhall", "value": "com.psa.mym.myvauxhall"}
+                ],
+                placeholder="Select your brand",
+            )]),
+        html.Div(className="mb-3", children=[
+            dbc.Label("Email", html_for="psa-email"),
+            dbc.Input(type="email", id="psa-email", placeholder="you@example.com"),
+            dbc.FormText(
+                "The email for your car account",
+                color="secondary",
+            )]),
+        html.Div(className="mb-3", children=[
+            dbc.Label("Password", html_for="psa-password"),
+            dbc.Input(
+                type="password",
+                id="psa-password",
+                placeholder="Account password",
             ),
-        ])
-    ])]))
-
-config_otp_layout = dbc.Row(dbc.Col(className="col-md-12 col-lg-2 m-3", children=[
-    dbc.Row(html.H2('Config OTP')),
-    dbc.Form(className="ms-2", children=[
-        dbc.Label("Click to receive a code by SMS", html_for="ask-sms"),
-        dbc.Button("Send SMS", color="info", id="ask-sms"),
-        html.Div(id="sms-demand-result", className="mt-2"),
-        dbc.Label("Write the code you just received by SMS", html_for="psa-email"),
-        dbc.Input(type="text", id="psa-code", placeholder="Enter code"),
-        dbc.Label("Enter your PIN code", html_for="psa-pin"),
-        dbc.Input(
-            type="password",
-            id="psa-pin",
-            placeholder="Enter codepin",
-        ),
+            dbc.FormText(
+                "The password for your car account",
+                color="secondary",
+            )]),
+        html.Div(className="mb-3", children=[
+            dbc.Label("Country code", html_for="psa-countrycode"),
+            dbc.Input(
+                type="text",
+                id="psa-countrycode",
+                placeholder="e.g. GB",
+            ),
+            dbc.FormText(
+                "Two letters: GB for Great Britain, FR for France…",
+                color="secondary",
+            )]),
+        dbc.Button("Sign in", color="primary", id="submit-form", className="w-100 mt-2"),
         dbc.FormText(
-            "It's a digit password",
+            "This can take a moment while we sign in for you.",
             color="secondary",
+            className="d-block mt-2"),
+        dcc.Loading(
+            id="loading-2",
+            children=[html.Div([html.Div(id="form_result")])],
+            type="circle",
         ),
-        html.Div([
-            dbc.Button("Submit", color="primary", id="finish-otp"),
-            html.Div(id="opt-result")]),
+    ])])
+
+config_otp_layout = html.Div(className="mokka-setup", children=[
+    html.Div("Verify it's you", className="mokka-title"),
+    html.Div("Step 2 of 2 — we'll text a code to the phone on your account. "
+             "Enter it with your account PIN to finish.",
+             className="mokka-subtitle"),
+    dbc.Form([
+        html.Div(className="mb-3", children=[
+            dbc.Button("Send me a code by SMS", color="info", id="ask-sms", className="w-100"),
+            html.Div(id="sms-demand-result", className="mt-2"),
+        ]),
+        html.Div(className="mb-3", children=[
+            dbc.Label("SMS code", html_for="psa-code"),
+            dbc.Input(type="text", id="psa-code", placeholder="Code from the text message"),
+        ]),
+        html.Div(className="mb-3", children=[
+            dbc.Label("Account PIN", html_for="psa-pin"),
+            dbc.Input(
+                type="password",
+                id="psa-pin",
+                placeholder="Your numeric PIN",
+            ),
+            dbc.FormText(
+                "The numeric PIN you set on your car account",
+                color="secondary",
+            )]),
+        dbc.Button("Finish setup", color="primary", id="finish-otp", className="w-100 mt-2"),
+        html.Div(id="opt-result", className="mt-2"),
         dcc.Location(id="otp-redirect-url", refresh=True),
         dcc.Interval(id="otp-redirect-interval", interval=5000, n_intervals=0, disabled=True),
-    ])]))
+    ])])
 
 
 def log_layout():
