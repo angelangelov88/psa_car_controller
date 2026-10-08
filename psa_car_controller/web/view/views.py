@@ -29,6 +29,7 @@ from psa_car_controller.web.view.config_views import log_layout, config_layout
 # pylint: disable=invalid-name
 from psa_car_controller.web.tools.figurefilter import FigureFilter
 from psa_car_controller.web.view.control import get_control_tabs
+from psa_car_controller.web.view.precond_tab import get_precond_layout
 
 from psa_car_controller import __version__
 from psa_car_controller.web.view import api  # pylint: disable=unused-import
@@ -88,6 +89,8 @@ def display_page(pathname, search):
         page = config_layout("otp")
     elif pathname == "/control":
         page = get_control_tabs(APP)
+    elif pathname == "/precond":
+        page = get_precond_layout()
     else:
         page = serve_layout()
     if no_header:
@@ -364,6 +367,12 @@ def serve_layout():
                     dbc.Tab(label="Map", tab_id="map", children=[maps]),
                     dbc.Tab(label="Control", tab_id="control", children=html.Iframe(
                         src=dash_app.config.requests_pathname_prefix + "control?header=false",
+                        style={"position": "absolute",
+                               "height": "100%",
+                               "width": "100%",
+                               "border": "none"})),
+                    dbc.Tab(label="Preconditioning", tab_id="precond", children=html.Iframe(
+                        src=dash_app.config.requests_pathname_prefix + "precond?header=false",
                         style={"position": "absolute",
                                "height": "100%",
                                "width": "100%",

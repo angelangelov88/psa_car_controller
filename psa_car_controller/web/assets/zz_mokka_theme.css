@@ -240,3 +240,128 @@ a:hover {
   color: var(--mk-muted);
   margin-bottom: 1.25rem;
 }
+
+/* ---- Mokka preconditioning panel ---------------------------------------- */
+
+/* The "Preconditioning" tab (precond_tab.py). Wider than the setup card: a
+ * single centred column holding status, the on/off toggle, and the schedules. */
+.mokka-panel {
+  max-width: 44rem;
+  margin: 1.5rem auto;
+  padding: 0 1rem 2rem;
+}
+.mokka-panel .mokka-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--mk-strong);
+  margin-bottom: 0.25rem;
+}
+.mokka-panel .mokka-subtitle {
+  font-size: 0.875rem;
+  color: var(--mk-muted);
+  margin-bottom: 1rem;
+}
+
+/* Status tiles */
+.mk-tile {
+  background-color: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius);
+  padding: 0.75rem 0.9rem;
+  height: 100%;
+}
+.mk-tile-label {
+  font-size: 0.75rem;
+  color: var(--mk-muted);
+  margin-bottom: 0.15rem;
+}
+.mk-tile-value {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--mk-strong);
+}
+
+/* Precondition-now card */
+.mk-toggle-card {
+  background-color: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius-lg);
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.5rem;
+}
+.mk-big-switch .form-check-label {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--mk-strong);
+}
+
+/* Section heading above the schedules */
+.mk-section-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--mk-strong);
+  margin-top: 0.5rem;
+}
+
+/* One schedule block */
+.mk-sched-row {
+  background-color: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius);
+  padding: 0.9rem 1rem;
+  margin: 0.75rem 0;
+}
+.mk-sched-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+.mk-sched-title {
+  font-weight: 600;
+  color: var(--mk-strong);
+}
+.mk-sched-switch .form-check-label {
+  color: var(--mk-label);
+}
+.mk-mini-label {
+  font-size: 0.75rem;
+  color: var(--mk-muted);
+  margin-bottom: 0.2rem;
+}
+
+/* Day checklist, laid out as a row of toggleable pills */
+.mk-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+}
+.mk-days .mk-day-label {
+  color: var(--mk-label);
+  font-size: 0.85rem;
+  margin-left: 0.3rem;
+}
+.mk-days .mk-day-input {
+  accent-color: var(--mk-accent);
+}
+
+/* Save row */
+.mk-save-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+/* Inline status messages after an action */
+.mk-status {
+  min-height: 1.25rem;
+  font-size: 0.875rem;
+}
+.mk-ok {
+  color: #6ee7b7;
+}
+.mk-err {
+  color: #fca5a5;
+}
