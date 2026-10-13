@@ -125,39 +125,45 @@ a:hover {
   box-shadow: 0 0 0 1px var(--mk-accent);
   color: var(--mk-strong);
 }
+/* Locked while signing in: keep the dark field (Bootstrap would turn it light)
+ * and dim it like the disabled dropdowns. */
+.form-control:disabled,
+.form-select:disabled {
+  background-color: var(--mk-input);
+  color: var(--mk-strong);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 
-/* dcc.Dropdown (react-select) used for the Car Brand picker. */
-.dash-dropdown .Select-control,
-.Select-control {
-  background-color: var(--mk-input);
-  border: 1px solid var(--mk-border);
+/* dcc.Dropdown (Dash 4) used for the Car Brand and Country pickers.
+ * Dash 4 colours its components through --Dash-* variables, which it injects
+ * on :root at runtime (after this file). Setting them on body wins through
+ * inheritance whatever the load order, and also reaches the open menu, which
+ * Dash renders in a popover at the end of body. */
+body {
+  --Dash-Stroke-Strong: var(--mk-border);
+  --Dash-Stroke-Weak: var(--mk-border);
+  --Dash-Fill-Interactive-Strong: var(--mk-accent);
+  --Dash-Fill-Interactive-Weak: rgba(167, 139, 250, 0.12);
+  --Dash-Fill-Inverse-Strong: var(--mk-input);
+  --Dash-Text-Primary: var(--mk-strong);
+  --Dash-Text-Strong: var(--mk-strong);
+  --Dash-Text-Weak: var(--mk-muted);
+  --Dash-Text-Disabled: var(--mk-faint);
+  --Dash-Fill-Primary-Hover: var(--mk-border);
+  --Dash-Fill-Primary-Active: var(--mk-border);
+  --Dash-Fill-Disabled: var(--mk-border);
+  --Dash-Shading-Strong: rgba(0, 0, 0, 0.6);
+  --Dash-Shading-Weak: rgba(0, 0, 0, 0.4);
+}
+/* Match the size and shape of the text inputs. The body prefix outranks
+ * Dash's own rules, which are also injected after this file. */
+body .dash-dropdown,
+body .dash-dropdown-content {
   border-radius: var(--mk-radius);
-  color: var(--mk-strong);
 }
-.Select-placeholder,
-.Select--single > .Select-control .Select-value {
-  color: var(--mk-strong);
-  line-height: 36px;
-}
-.Select-value-label {
-  color: var(--mk-strong) !important;
-}
-.Select-menu-outer {
-  background-color: var(--mk-surface);
-  border: 1px solid var(--mk-border);
-  border-radius: var(--mk-radius);
-  color: var(--mk-strong);
-}
-.Select-option {
-  background-color: var(--mk-surface);
-  color: var(--mk-label);
-}
-.Select-option.is-focused {
-  background-color: var(--mk-input);
-  color: var(--mk-strong);
-}
-.Select-input > input {
-  color: var(--mk-strong);
+body .dash-dropdown-trigger {
+  padding: 0.65rem 0.9rem;
 }
 
 /* ---- Alerts (login/OTP result messages) --------------------------------- */

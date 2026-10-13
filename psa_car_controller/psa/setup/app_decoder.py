@@ -19,6 +19,15 @@ GITHUB_REPO = "psa_apk"
 TIMEOUT_IN_S = 30
 
 
+class SignInRejected(ConnectionError):
+    """The brand's account service answered without a token, e.g. returnCode NEED_CREATION
+    when there's no account for that email under the chosen brand and country."""
+
+    def __init__(self, return_code):
+        super().__init__(f"Sign-in rejected by the account service: {return_code}")
+        self.return_code = return_code
+
+
 def get_content_from_apk(filename: str, country_code: str) -> ApkParser:
     urlretrieve_from_github(GITHUB_USER, GITHUB_REPO, "", filename)
     apk_parser = ApkParser(filename, country_code)
@@ -60,7 +69,7 @@ class InitialSetup:
             elif token := data.get("token"):
                 self.token = token
             else:
-                raise ConnectionError("No access token in response:", res.text)
+                raise SignInRejected(data.get("returnCode", "UNKNOWN"))
         except ConnectionError as e:
             raise e
         except Exception as ex:

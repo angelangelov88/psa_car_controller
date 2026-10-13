@@ -7,9 +7,11 @@ from dash.exceptions import PreventUpdate
 from psa_car_controller.psa.otp.otp import new_otp_session
 from psa_car_controller.psa.setup.headless_oauth import HeadlessOAuthError, get_oauth_code_headless
 from psa_car_controller.psacc.application.car_controller import PSACarController
-from psa_car_controller.psa.setup.app_decoder import InitialSetup
+from psa_car_controller.psa.setup.app_decoder import InitialSetup, SignInRejected
 from psa_car_controller.common.mylogger import LOG_FILE
 from psa_car_controller.web.app import dash_app
+from psa_car_controller.web.view.sign_in import (BRANDS, COUNTRIES, SIGN_IN_FAILED, SIGN_IN_HINT, is_sign_in_ready,
+                                                 sign_in_rejected_message)
 import dash_bootstrap_components as dbc
 from dash.dependencies import Output, Input, State
 
@@ -28,13 +30,7 @@ setup_config_layout = html.Div(className="mokka-setup", children=[
             dbc.Label("Car brand", html_for="psa-app"),
             dcc.Dropdown(
                 id="psa-app",
-                options=[
-                    {"label": "Peugeot", "value": "com.psa.mym.mypeugeot"},
-                    {"label": "Opel", "value": "com.psa.mym.myopel"},
-                    {"label": "Citroën", "value": "com.psa.mym.mycitroen"},
-                    {"label": "DS", "value": "com.psa.mym.myds"},
-                    {"label": "Vauxhall", "value": "com.psa.mym.myvauxhall"}
-                ],
+                options=[{"label": name, "value": package} for package, name in BRANDS],
                 placeholder="Select your brand",
             )]),
         html.Div(className="mb-3", children=[
@@ -56,26 +52,25 @@ setup_config_layout = html.Div(className="mokka-setup", children=[
                 color="secondary",
             )]),
         html.Div(className="mb-3", children=[
-            dbc.Label("Country code", html_for="psa-countrycode"),
-            dbc.Input(
-                type="text",
+            dbc.Label("Country", html_for="psa-countrycode"),
+            dcc.Dropdown(
                 id="psa-countrycode",
-                placeholder="e.g. GB",
+                options=[{"label": f"{name} ({code})", "value": code} for code, name in COUNTRIES],
+                placeholder="Select your country",
             ),
             dbc.FormText(
-                "Two letters: GB for Great Britain, FR for France…",
+                "The country your car account is registered in",
                 color="secondary",
             )]),
-        dbc.Button("Sign in", color="primary", id="submit-form", className="w-100 mt-2"),
+        dbc.Button(
+            [html.Span(id="submit-spinner", className="d-none"), html.Span("Sign in", id="submit-label")],
+            color="primary", id="submit-form", className="w-100 mt-2", disabled=True),
         dbc.FormText(
-            "This can take a moment while we sign in for you.",
+            SIGN_IN_HINT,
+            id="submit-hint",
             color="secondary",
             className="d-block mt-2"),
-        dcc.Loading(
-            id="loading-2",
-            children=[html.Div([html.Div(id="form_result")])],
-            type="circle",
-        ),
+        html.Div(id="form_result", className="mt-2"),
     ])])
 
 config_otp_layout = html.Div(className="mokka-setup", children=[
@@ -136,24 +131,53 @@ def config_layout(activeTabs="log"):
 
 
 @dash_app.callback(
+    Output("submit-form", "disabled"),
+    Input("psa-app", "value"),
+    Input("psa-email", "value"),
+    Input("psa-password", "value"),
+    Input("psa-countrycode", "value"))
+def toggle_sign_in(app_name, email, password, countrycode):
+    return not is_sign_in_ready(app_name, email, password, countrycode)
+
+
+# While signing in, lock the whole form so it can't be changed or sent twice,
+# and show a spinner on the button.
+SIGN_IN_RUNNING = [
+    (Output(field, "disabled"), True, False)
+    for field in ("psa-app", "psa-email", "psa-password", "psa-countrycode", "submit-form")
+] + [
+    (Output("submit-spinner", "className"), "spinner-border spinner-border-sm me-2", "d-none"),
+    (Output("submit-label", "children"), "Signing in…", "Sign in"),
+    (Output("submit-hint", "children"), "Signing in to your car account. This can take up to a minute, "
+                                        "please keep this page open.", SIGN_IN_HINT),
+]
+
+
+@dash_app.callback(
     Output("form_result", "children"),
     Input("submit-form", "n_clicks"),
     State("psa-app", "value"),
     State("psa-email", "value"),
     State("psa-password", "value"),
-    State("psa-countrycode", "value"))
+    State("psa-countrycode", "value"),
+    running=SIGN_IN_RUNNING,
+    prevent_initial_call=True)
 def connectPSA(n_clicks, app_name, email, password, countrycode):  # pylint: disable=unused-argument
     ctx = callback_context
     if ctx.triggered:
+        email = email.strip()
         logger.info("Initial setup...")
         try:
             global INITIAL_SETUP
             INITIAL_SETUP = InitialSetup(app_name, email, password, countrycode)
             auth_url = INITIAL_SETUP.psacc.manager.generate_redirect_url()
             scheme = INITIAL_SETUP.psacc.manager.redirect_uri.split("://")[0]
+        except SignInRejected as e:
+            logger.warning("Sign-in rejected by the account service: %s", e.return_code)
+            return dbc.Alert(sign_in_rejected_message(e.return_code, app_name, countrycode), color="danger")
         except Exception as e:
             logger.exception(e)
-            return dbc.Alert(str(e), color="danger")
+            return dbc.Alert(SIGN_IN_FAILED, color="danger")
 
         # Attempt automatic headless OAuth
         try:
