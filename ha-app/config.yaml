@@ -1,0 +1,22 @@
+# Home Assistant app for this fork, built from source on the HA machine.
+# ha-app/sync.ps1 copies it, with the source, to HA's local apps folder.
+name: psacc (fork)
+version: "0.1.0"
+slug: psacc_fork
+description: PSA Car Controller built from the angelangelov88 fork, with the new setup screens and preconditioning tab.
+url: https://github.com/angelangelov88/psa_car_controller
+arch:
+  - amd64
+startup: application
+# Manual until the stock psacc app is switched off: two copies on one account fight over its tokens.
+boot: manual
+# Reached only through HA (sidebar and other apps); no port is opened on the network.
+ingress: true
+ingress_port: 5000
+panel_icon: mdi:car-electric
+panel_title: psacc (fork)
+watchdog: tcp://[HOST]:[PORT:5000]
+# Config, tokens and OTP state live in /config (addon_configs/local_psacc_fork on the Samba share).
+map:
+  - type: addon_config
+    read_only: false
