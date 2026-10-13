@@ -1,6 +1,6 @@
 import logging
 
-from dash import callback_context, html, dcc
+from dash import html, dcc, no_update
 from dash.exceptions import PreventUpdate
 
 from psa_car_controller.web.app import dash_app
@@ -8,12 +8,14 @@ import dash_bootstrap_components as dbc
 from dash.dependencies import Output, Input, State
 
 from psa_car_controller.web.view import config_views
+from psa_car_controller.web.view.setup_flow import NotSignedIn
 
 logger = logging.getLogger(__name__)
 
 
 def get_oauth_config_layout(redirect_url):
     return html.Div(className="mokka-setup", children=[
+        config_views.fake_mode_banner(),
         html.Div("Finish sign-in manually", className="mokka-title"),
         html.Div("Automatic sign-in didn't complete, so we'll do it by hand this once.",
                  className="mokka-subtitle"),
@@ -35,27 +37,37 @@ def get_oauth_config_layout(redirect_url):
                     "The code you copied above",
                     color="secondary",
                 )]),
-            dbc.Button("Continue", color="primary", id="finish-oauth", className="w-100 mt-2"),
-            dcc.Loading(
-                id="loading-2",
-                children=[html.Div([html.Div(id="oauth-result")])],
-                type="circle",
-            ),
+            dbc.Button(config_views.button_content("oauth", "Continue"),
+                       color="primary", id="finish-oauth", className="w-100 mt-2", disabled=True),
+            html.Div(id="oauth-result", className="mt-2"),
+            dcc.Location(id="oauth-redirect", refresh=True),
         ])])
 
 
 @dash_app.callback(
+    Output("finish-oauth", "disabled"),
+    Input("psa-oauth-code", "value"))
+def toggle_finish_oauth(code):
+    return not (code and code.strip())
+
+
+@dash_app.callback(
     Output("oauth-result", "children"),
+    Output("oauth-redirect", "href"),
     Input("finish-oauth", "n_clicks"),
-    State("psa-oauth-code", "value"))
+    State("psa-oauth-code", "value"),
+    running=config_views.running_state("oauth", "Continue", "Signing in…", ("psa-oauth-code", "finish-oauth")),
+    prevent_initial_call=True)
 def finish_oauth(n_clicks, code):  # pylint: disable=unused-argument
-    ctx = callback_context
-    if ctx.triggered:
-        try:
-            config_views.INITIAL_SETUP.connect(code)
-            return dbc.Alert(["PSA login finish !", html.A(" Go to otp config",
-                             href=dash_app.config.requests_pathname_prefix + "config_otp")], color="success")
-        except Exception as e:
-            logger.exception("finish_oauth:")
-            return dbc.Alert(str(e), color="danger")
-    raise PreventUpdate()
+    if not code:
+        raise PreventUpdate()
+    try:
+        config_views.SETUP_FLOW.finish_manual_sign_in(code.strip())
+    except NotSignedIn:
+        return dbc.Alert("Start again from step 1: sign in on the User config page.", color="danger"), no_update
+    except Exception:
+        logger.exception("finish_oauth:")
+        return dbc.Alert("That login code wasn't accepted. Codes only work once and expire quickly, "
+                         "so go through the login page again and copy the new code.", color="danger"), no_update
+    # Signed in: move straight on to the code step.
+    return dbc.Alert("Signed in.", color="success"), dash_app.get_relative_path("/config_otp")

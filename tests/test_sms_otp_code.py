@@ -37,6 +37,7 @@ class TestSmsOtpCode(unittest.TestCase):
         # THEN an exception with status code and body is raised
         with self.assertRaises(RemoteException) as ctx:
             remote_client.get_sms_otp_code()
+        self.assertEqual(401, ctx.exception.status_code)
         self.assertIn("401", str(ctx.exception))
         self.assertIn("invalid_token", str(ctx.exception))
 

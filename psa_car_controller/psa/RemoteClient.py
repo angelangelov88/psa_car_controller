@@ -47,6 +47,14 @@ class RemoteException(Exception):
     pass
 
 
+class SmsRequestFailed(RemoteException):
+    """PSA refused to text an OTP code. The status code says why, e.g. 429 after too many requests."""
+
+    def __init__(self, status_code, text):
+        super().__init__(f"SMS request failed: HTTP {status_code} {text}")
+        self.status_code = status_code
+
+
 class RemoteClient:
 
     def __init__(self, account_info: AccountInformation, vehicles_list: Cars, manager: OpenIdCredentialManager,
@@ -281,7 +289,7 @@ class RemoteClient:
         logger.info("SMS code request: HTTP %s", res.status_code)
         if not res.ok:
             logger.error("SMS code request failed: HTTP %s %s", res.status_code, res.text)
-            raise RemoteException(f"SMS request failed: HTTP {res.status_code} {res.text}")
+            raise SmsRequestFailed(res.status_code, res.text)
         return res
 
     # 6 otp by day

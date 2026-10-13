@@ -24,7 +24,7 @@ from psa_car_controller.web.app import dash_app
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web.tools.utils import diff_dashtable, unix_time_millis, get_marks_from_start_end, create_card
 from psa_car_controller.web.view.config_oauth import get_oauth_config_layout
-from psa_car_controller.web.view.config_views import log_layout, config_layout
+from psa_car_controller.web.view.config_views import log_layout, config_layout, SETUP_FLOW
 
 # pylint: disable=invalid-name
 from psa_car_controller.web.tools.figurefilter import FigureFilter
@@ -79,6 +79,8 @@ def display_page(pathname, search):
     no_header = query_params.get("header", None) == ["false"]
     if pathname == "/config_connect":
         page = get_oauth_config_layout(query_params["url"][0])
+    elif pathname == "/config_otp" and SETUP_FLOW.signed_in:
+        page = config_layout("otp")  # fake mode: signed in, though the app has no real config
     elif not APP.is_good or pathname == "/config_login":
         page = config_layout("login")
     elif pathname == "/config":
