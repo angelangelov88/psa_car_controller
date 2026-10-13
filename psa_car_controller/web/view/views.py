@@ -24,7 +24,8 @@ from psa_car_controller.web.app import dash_app
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web.tools.utils import diff_dashtable, unix_time_millis, get_marks_from_start_end, create_card
 from psa_car_controller.web.view.config_oauth import get_oauth_config_layout
-from psa_car_controller.web.view.config_views import log_layout, config_layout, SETUP_FLOW
+from psa_car_controller.web.view.config_views import log_layout, config_layout, setup_links, SETUP_FLOW
+from psa_car_controller.web.view.setup_steps import GET_CODE, SIGN_IN
 
 # pylint: disable=invalid-name
 from psa_car_controller.web.tools.figurefilter import FigureFilter
@@ -77,25 +78,30 @@ def display_page(pathname, search):
     pathname = pathname[len(prefix) - 1:]
     query_params = parse_qs(urlparse(search).query)
     no_header = query_params.get("header", None) == ["false"]
+    setup_step = SETUP_FLOW.current_step()
     if pathname == "/config_connect":
         page = get_oauth_config_layout(query_params["url"][0])
-    elif pathname == "/config_otp" and SETUP_FLOW.signed_in:
-        page = config_layout("otp")  # fake mode: signed in, though the app has no real config
-    elif not APP.is_good or pathname == "/config_login":
-        page = config_layout("login")
+    elif pathname == "/log":
+        page = log_layout()  # also before sign-in, to see why it failed
+        if not APP.is_good:
+            page = html.Div([page, setup_links(("Back to setup", "/config"))])
+    elif setup_step == SIGN_IN or pathname == "/config_login":
+        page = config_layout(SIGN_IN)
+    elif pathname == "/config_otp" or (pathname == "/config" and setup_step == GET_CODE):
+        page = config_layout(GET_CODE)  # setup isn't finished: the settings page opens at the code step
+    elif not APP.is_good:
+        # Only in fake mode: the setup screens say signed in, but the app has no real config.
+        page = config_layout(GET_CODE if setup_step == GET_CODE else SIGN_IN)
     elif pathname == "/config":
         page = config_layout()
-    elif pathname == "/log":
-        page = log_layout()
-    elif pathname == "/config_otp":
-        page = config_layout("otp")
     elif pathname == "/control":
         page = get_control_tabs(APP)
     elif pathname == "/precond":
         page = get_precond_layout()
     else:
         page = serve_layout()
-    if no_header:
+    # Until signed in there's no dashboard or settings to link to, so the setup pages go without the header.
+    if no_header or not APP.is_good:
         return page
     return add_header(page)
 

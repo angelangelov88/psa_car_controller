@@ -41,7 +41,8 @@ def get_oauth_config_layout(redirect_url):
                        color="primary", id="finish-oauth", className="w-100 mt-2", disabled=True),
             html.Div(id="oauth-result", className="mt-2"),
             dcc.Location(id="oauth-redirect", refresh=True),
-        ])])
+        ]),
+        config_views.setup_links(config_views.SIGN_IN_AGAIN_LINK, config_views.LOG_LINK)])
 
 
 @dash_app.callback(
@@ -64,7 +65,9 @@ def finish_oauth(n_clicks, code):  # pylint: disable=unused-argument
     try:
         config_views.SETUP_FLOW.finish_manual_sign_in(code.strip())
     except NotSignedIn:
-        return dbc.Alert("Start again from step 1: sign in on the User config page.", color="danger"), no_update
+        return dbc.Alert(["Start again from step 1: ",
+                          dcc.Link("sign in", href=dash_app.get_relative_path("/config_login")), "."],
+                         color="danger"), no_update
     except Exception:
         logger.exception("finish_oauth:")
         return dbc.Alert("That login code wasn't accepted. Codes only work once and expire quickly, "

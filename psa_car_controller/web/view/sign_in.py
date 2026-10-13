@@ -21,7 +21,7 @@ EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 RETURN_CODE_PATTERN = re.compile(r"^[A-Z0-9_]{1,40}$")
 SIGN_IN_HINT = "This can take a moment while we sign in for you."
 SIGN_IN_FAILED = ("We couldn't sign you in just now. Check your connection and try again. "
-                  "The Log tab has the details.")
+                  "The log has the details.")
 
 
 def is_sign_in_ready(app_name, email, password, countrycode):

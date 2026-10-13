@@ -12,7 +12,7 @@ SMS_HINT = "Only a few codes can be sent each day, so wait for the text before a
 NOT_SIGNED_IN = "Sign in first (step 1), then ask for a code."
 CODE_REJECTED = ("That code or PIN wasn't accepted. Check both and try again. "
                  "If the code is more than a few minutes old, ask for a new one.")
-FINISH_FAILED = "We couldn't finish setup just now. Try again in a moment. The Log tab has the details."
+FINISH_FAILED = "We couldn't finish setup just now. Try again in a moment. The log has the details."
 
 
 def is_code_ready(sms_code, pin):
@@ -35,4 +35,4 @@ def sms_failed_message(status_code):
         return "Too many codes have been asked for today. Try again tomorrow."
     if status_code in (401, 403):
         return "Your sign-in has expired. Sign in again (step 1), then ask for a new code."
-    return "We couldn't send a code just now. Try again in a minute. The Log tab has the details."
+    return "We couldn't send a code just now. Try again in a minute. The log has the details."

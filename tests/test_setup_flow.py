@@ -6,6 +6,7 @@ from psa_car_controller.web.view.otp_step import (RESEND_LABEL, SEND_LABEL, is_c
                                                   sms_failed_message)
 from psa_car_controller.web.view.setup_flow import (FAKE_SETUP_ENV, CodeRejected, FakeSetupFlow, ManualSignInNeeded,
                                                     NotSignedIn, RealSetupFlow, create_setup_flow)
+from psa_car_controller.web.view.setup_steps import DONE, GET_CODE, SIGN_IN, step_states
 
 VAUXHALL = "com.psa.mym.myvauxhall"
 
@@ -42,6 +43,18 @@ class TestCodeStep(unittest.TestCase):
         self.assertIn("Try again in a minute", sms_failed_message(500))
 
 
+class TestSetupSteps(unittest.TestCase):
+
+    def test_first_step_is_current(self):
+        self.assertEqual([("Sign in", "current"), ("Get a code", "todo"), ("Done", "todo")], step_states(SIGN_IN))
+
+    def test_signed_in_ticks_the_first_step(self):
+        self.assertEqual([("Sign in", "done"), ("Get a code", "current"), ("Done", "todo")], step_states(GET_CODE))
+
+    def test_finished_ticks_every_step(self):
+        self.assertEqual([("Sign in", "done"), ("Get a code", "done"), ("Done", "done")], step_states(DONE))
+
+
 class TestFakeSetupFlow(unittest.TestCase):
 
     def test_chosen_by_env(self):
@@ -56,6 +69,17 @@ class TestFakeSetupFlow(unittest.TestCase):
         self.assertTrue(flow.signed_in)
         flow.send_sms()
         flow.finish("123456", "1234")
+
+    def test_current_step_follows_the_flow(self):
+        flow = fake_flow()
+        self.assertEqual(SIGN_IN, flow.current_step())
+        flow.sign_in(VAUXHALL, "me@example.com", "password", "GB")
+        self.assertEqual(GET_CODE, flow.current_step())
+        with self.assertRaises(CodeRejected):
+            flow.finish("000000", "1234")
+        self.assertEqual(GET_CODE, flow.current_step())
+        flow.finish("123456", "1234")
+        self.assertEqual(DONE, flow.current_step())
 
     def test_code_step_needs_sign_in(self):
         flow = fake_flow()

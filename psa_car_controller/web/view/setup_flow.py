@@ -13,10 +13,11 @@ import logging
 import os
 import time
 
-from psa_car_controller.psa.otp.otp import new_otp_session
+from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME, new_otp_session
 from psa_car_controller.psa.setup.app_decoder import InitialSetup, SignInRejected
 from psa_car_controller.psa.setup.headless_oauth import HeadlessOAuthError, get_oauth_code_headless
 from psa_car_controller.psacc.application.car_controller import PSACarController
+from psa_car_controller.web.view.setup_steps import DONE, GET_CODE, SIGN_IN
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +48,13 @@ class RealSetupFlow:
     def __init__(self):
         self.initial_setup: InitialSetup = None
 
-    @property
-    def signed_in(self):
-        # Once signed in, the app has loaded the new config and routing goes by PSACarController.is_good.
-        return False
+    @staticmethod
+    def current_step():
+        app = PSACarController()
+        if not app.is_good or getattr(app, "myp", None) is None:
+            return SIGN_IN
+        # new_otp_session writes otp.bin once the code and PIN are accepted.
+        return DONE if os.path.isfile(OTP_CONFIG_NAME) else GET_CODE
 
     def sign_in(self, app_name, email, password, countrycode):
         self.initial_setup = InitialSetup(app_name, email, password, countrycode)
@@ -99,6 +103,12 @@ class FakeSetupFlow:
 
     def __init__(self):
         self.signed_in = False
+        self.finished = False
+
+    def current_step(self):
+        if not self.signed_in:
+            return SIGN_IN
+        return DONE if self.finished else GET_CODE
 
     def sign_in(self, app_name, email, password, countrycode):  # pylint: disable=unused-argument
         time.sleep(self.DELAY_IN_S)
@@ -125,6 +135,7 @@ class FakeSetupFlow:
         time.sleep(self.DELAY_IN_S)
         if sms_code == "000000":
             raise CodeRejected()
+        self.finished = True
 
 
 def create_setup_flow():

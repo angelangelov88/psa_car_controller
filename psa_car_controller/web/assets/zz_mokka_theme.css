@@ -247,6 +247,69 @@ body .dash-dropdown-trigger {
   margin-bottom: 1.25rem;
 }
 
+/* Setup stepper (1 Sign in -> 2 Get a code -> Done), drawn from setup_steps.py */
+.mk-stepper {
+  display: flex;
+  gap: 0.5rem;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.25rem;
+}
+.mk-step {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-top: 0.5rem;
+  border-top: 3px solid var(--mk-border);
+  font-size: 0.8125rem;
+  color: var(--mk-faint);
+}
+.mk-step-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  border: 1px solid var(--mk-border);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.mk-step-current {
+  border-top-color: var(--mk-accent);
+  color: var(--mk-strong);
+  font-weight: 600;
+}
+.mk-step-current .mk-step-mark {
+  border-color: var(--mk-accent);
+  color: var(--mk-accent);
+}
+.mk-step-done {
+  border-top-color: var(--mk-accent-active);
+  color: var(--mk-label);
+}
+.mk-step-done .mk-step-mark {
+  background-color: var(--mk-accent);
+  border-color: var(--mk-accent);
+  color: var(--mk-on-accent);
+}
+
+/* Links under a setup card (back to sign-in, the log) */
+.mk-setup-links {
+  display: flex;
+  justify-content: center;
+  gap: 1.25rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--mk-border);
+  font-size: 0.875rem;
+}
+.mk-setup-links a {
+  color: var(--mk-accent);
+}
+
 /* ---- Mokka preconditioning panel ---------------------------------------- */
 
 /* The "Preconditioning" tab (precond_tab.py). Wider than the setup card: a

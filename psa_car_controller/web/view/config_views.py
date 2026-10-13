@@ -12,6 +12,7 @@ from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view.otp_step import (CODE_REJECTED, FINISH_FAILED, NOT_SIGNED_IN, SEND_LABEL, SMS_HINT,
                                                   is_code_ready, sms_button_state, sms_failed_message)
 from psa_car_controller.web.view.setup_flow import CodeRejected, ManualSignInNeeded, NotSignedIn, create_setup_flow
+from psa_car_controller.web.view.setup_steps import GET_CODE, SIGN_IN, step_states
 from psa_car_controller.web.view.sign_in import (BRANDS, COUNTRIES, SIGN_IN_FAILED, SIGN_IN_HINT, is_sign_in_ready,
                                                  sign_in_rejected_message)
 import dash_bootstrap_components as dbc
@@ -35,10 +36,35 @@ def button_content(prefix, label):
     return [html.Span(id=f"{prefix}-spinner", className="d-none"), html.Span(label, id=f"{prefix}-label")]
 
 
+def setup_links(*links):
+    """Small links under a setup card, e.g. back to sign-in or to the log."""
+    return html.Div(className="mk-setup-links", children=[
+        dcc.Link(label, href=dash_app.get_relative_path(path)) for label, path in links])
+
+
+LOG_LINK = ("View the log", "/log")
+SIGN_IN_AGAIN_LINK = ("Sign in again", "/config_login")
+
+
+def stepper(current):
+    """1 Sign in -> 2 Get a code -> Done, with the steps already done ticked and the current one highlighted."""
+    items = []
+    for number, (label, state) in enumerate(step_states(current), start=1):
+        mark = "✓" if state == "done" else str(number)
+        current_attr = {"aria-current": "step"} if state == "current" else {}
+        items.append(html.Li(
+            [html.Span(mark, className="mk-step-mark", **{"aria-hidden": "true"}),
+             html.Span(label),
+             html.Span(", done", className="visually-hidden") if state == "done" else None],
+            className=f"mk-step mk-step-{state}", **current_attr))
+    return html.Ol(items, className="mk-stepper", **{"aria-label": "Setup progress"})
+
+
 setup_config_layout = html.Div(className="mokka-setup", children=[
     fake_mode_banner(),
+    html.Div(id="steps-login"),
     html.Div("Connect your car", className="mokka-title"),
-    html.Div("Step 1 of 2 — sign in with your Vauxhall/Stellantis account. "
+    html.Div("Sign in with your Vauxhall/Stellantis account. "
              "These details stay on your psacc server and are never sent anywhere else.",
              className="mokka-subtitle"),
     dbc.Form([
@@ -86,14 +112,17 @@ setup_config_layout = html.Div(className="mokka-setup", children=[
             color="secondary",
             className="d-block mt-2"),
         html.Div(id="form_result", className="mt-2"),
-    ])])
+    ]),
+    setup_links(LOG_LINK)])
 
 config_otp_layout = html.Div(className="mokka-setup", children=[
     fake_mode_banner(),
+    html.Div(id="steps-otp"),
     html.Div("Verify it's you", className="mokka-title"),
-    html.Div("Step 2 of 2 — we'll text a code to the phone on your account. "
+    html.Div("We'll text a code to the phone on your account. "
              "Enter it with your account PIN to finish.",
              className="mokka-subtitle"),
+    html.Div(id="otp-needs-sign-in"),
     dbc.Form([
         html.Div(className="mb-3", children=[
             dbc.Button(button_content("sms", SEND_LABEL), color="info", id="ask-sms", className="w-100"),
@@ -128,7 +157,8 @@ config_otp_layout = html.Div(className="mokka-setup", children=[
         html.Div(id="opt-result", className="mt-2"),
         dcc.Location(id="otp-redirect-url", refresh=True),
         dcc.Interval(id="otp-redirect-interval", interval=5000, n_intervals=0, disabled=True),
-    ])])
+    ]),
+    setup_links(SIGN_IN_AGAIN_LINK, LOG_LINK)])
 
 
 def log_layout():
@@ -149,11 +179,30 @@ def log_layout():
         html.Div(id="empty-div")])
 
 
-def config_layout(activeTabs="log"):
-    return dbc.Tabs(id="config-tabs", active_tab=activeTabs, children=[
-        dbc.Tab([log_layout()], label="Log", tab_id="log"),
-        dbc.Tab([setup_config_layout], label="User config", tab_id="login"),
-        dbc.Tab([config_otp_layout], label="OTP config", tab_id="otp")])
+def card_class(card, shown):
+    return None if card == shown else "d-none"
+
+
+def config_layout(card="log"):
+    """The log, or the setup card for one step (SIGN_IN or GET_CODE). The stepper on each card shows where
+    setup has got to, and signing in swaps straight to the code card."""
+    if card not in (SIGN_IN, GET_CODE):
+        return log_layout()
+    return html.Div([
+        # Where setup has got to, worked out on each page load and moved on by the sign-in and finish callbacks.
+        dcc.Store(id="setup-step", data=SETUP_FLOW.current_step()),
+        html.Div(setup_config_layout, id="card-login", className=card_class(SIGN_IN, card)),
+        html.Div(config_otp_layout, id="card-otp", className=card_class(GET_CODE, card))])
+
+
+@dash_app.callback(
+    Output("steps-login", "children"),
+    Output("steps-otp", "children"),
+    Output("otp-needs-sign-in", "children"),
+    Input("setup-step", "data"))
+def show_steps(step):
+    needs_sign_in = dbc.Alert(NOT_SIGNED_IN, color="info") if step == SIGN_IN else None
+    return stepper(step), stepper(step), needs_sign_in
 
 
 @dash_app.callback(
@@ -209,7 +258,9 @@ def manual_sign_in_alert(error: ManualSignInNeeded):
 
 @dash_app.callback(
     Output("form_result", "children"),
-    Output("config-tabs", "active_tab"),
+    Output("card-login", "className"),
+    Output("card-otp", "className"),
+    Output("setup-step", "data"),
     Input("submit-form", "n_clicks"),
     State("psa-app", "value"),
     State("psa-email", "value"),
@@ -223,14 +274,16 @@ def connectPSA(n_clicks, app_name, email, password, countrycode):  # pylint: dis
         SETUP_FLOW.sign_in(app_name, email.strip(), password, countrycode)
     except SignInRejected as e:
         logger.warning("Sign-in rejected by the account service: %s", e.return_code)
-        return dbc.Alert(sign_in_rejected_message(e.return_code, app_name, countrycode), color="danger"), no_update
+        return (dbc.Alert(sign_in_rejected_message(e.return_code, app_name, countrycode), color="danger"),
+                no_update, no_update, no_update)
     except ManualSignInNeeded as e:
-        return manual_sign_in_alert(e), no_update
+        return manual_sign_in_alert(e), no_update, no_update, no_update
     except Exception as e:
         logger.exception(e)
-        return dbc.Alert(SIGN_IN_FAILED, color="danger"), no_update
+        return dbc.Alert(SIGN_IN_FAILED, color="danger"), no_update, no_update, no_update
     # Signed in: move straight on to the code step.
-    return dbc.Alert("Signed in.", color="success"), "otp"
+    return (dbc.Alert("Signed in.", color="success"), card_class(SIGN_IN, GET_CODE), card_class(GET_CODE, GET_CODE),
+            SETUP_FLOW.current_step())
 
 
 @dash_app.callback(
@@ -261,8 +314,11 @@ def askCode(n_clicks):  # pylint: disable=unused-argument
     Output("sms-label", "children"),
     Output("sms-cooldown", "disabled"),
     Input("sms-cooldown", "n_intervals"),
-    Input("sms-sent-at", "data"))
-def sms_cooldown(n_intervals, sent_at):  # pylint: disable=unused-argument
+    Input("sms-sent-at", "data"),
+    Input("setup-step", "data"))
+def sms_cooldown(n_intervals, sent_at, step):  # pylint: disable=unused-argument
+    if step == SIGN_IN:
+        return True, SEND_LABEL, True
     disabled, label, counting = sms_button_state(sent_at, time.time())
     return disabled, label, not counting
 
@@ -270,14 +326,16 @@ def sms_cooldown(n_intervals, sent_at):  # pylint: disable=unused-argument
 @dash_app.callback(
     Output("finish-otp", "disabled"),
     Input("psa-code", "value"),
-    Input("psa-pin", "value"))
-def toggle_finish(sms_code, code_pin):
-    return not is_code_ready(sms_code, code_pin)
+    Input("psa-pin", "value"),
+    Input("setup-step", "data"))
+def toggle_finish(sms_code, code_pin, step):
+    return step == SIGN_IN or not is_code_ready(sms_code, code_pin)
 
 
 @dash_app.callback(
     [Output("opt-result", "children"),
-     Output("otp-redirect-interval", "disabled")],
+     Output("otp-redirect-interval", "disabled"),
+     Output("setup-step", "data")],
     Input("finish-otp", "n_clicks"),
     State("psa-pin", "value"),
     State("psa-code", "value"),
@@ -287,18 +345,18 @@ def finishOtp(n_clicks, code_pin, sms_code):  # pylint: disable=unused-argument
     try:
         SETUP_FLOW.finish(sms_code.strip(), code_pin.strip())
     except NotSignedIn:
-        return dbc.Alert(NOT_SIGNED_IN, color="danger"), True
+        return dbc.Alert(NOT_SIGNED_IN, color="danger"), True, no_update
     except CodeRejected:
-        return dbc.Alert(CODE_REJECTED, color="danger"), True
+        return dbc.Alert(CODE_REJECTED, color="danger"), True, no_update
     except Exception:
         logger.exception("finishOtp:")
-        return dbc.Alert(FINISH_FAILED, color="danger"), True
+        return dbc.Alert(FINISH_FAILED, color="danger"), True, no_update
     home = dash_app.get_relative_path("/")
     saved = " (Fake mode: nothing was saved.)" if SETUP_FLOW.fake else ""
     alert = dbc.Alert(
         [f"Setup finished!{saved} Redirecting to home in 5 seconds… ",
          html.A("Go to home now", href=home)], color="success")
-    return alert, False  # enable the interval -> auto-redirect
+    return alert, False, SETUP_FLOW.current_step()  # enable the interval -> auto-redirect
 
 
 @dash_app.callback(
