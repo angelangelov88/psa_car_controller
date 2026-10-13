@@ -1,4 +1,4 @@
-"""Mokka-style preconditioning tab.
+"""The Home page, the only page besides settings and setup.
 
 A single Dash screen that mirrors the Mokka Companion app inside psacc: car
 status, a preconditioning on/off toggle, and the four weekly schedules. It is
@@ -17,6 +17,7 @@ from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, validate_preco
 from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.web.app import dash_app
+from psa_car_controller.web.view.status_text import format_mileage
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ def _status_cards(car):
         return html.Div("Car status isn't available yet.", className="mokka-subtitle")
 
     battery = _status_value(lambda: car.status.get_energy('Electric').level)
-    mileage = _status_value(lambda: round(car.status.timed_odometer.mileage))
+    mileage = _status_value(lambda: format_mileage(car.status.timed_odometer.mileage))
     precond = _status_value(
         lambda: "On" if car.status.preconditionning.air_conditioning.status != "Disabled" else "Off")
     charging = _status_value(
@@ -59,7 +60,7 @@ def _status_cards(car):
 
     return dbc.Row(className="g-2 mb-3", children=[
         _stat_tile("Battery", f"{battery}%" if battery != "—" else "—"),
-        _stat_tile("Mileage", f"{mileage} km" if mileage != "—" else "—"),
+        _stat_tile("Mileage", mileage),
         _stat_tile("Preconditioning", precond),
         _stat_tile("Charging", charging),
     ])
@@ -113,7 +114,7 @@ def _schedule_row(index, program):
     ])
 
 
-def get_precond_layout():
+def get_home_layout():
     car = _get_car()
     try:
         vin = car.vin if car else None
@@ -128,12 +129,14 @@ def get_precond_layout():
     ]
 
     return html.Div(className="mokka-panel", children=[
-        html.Div("Preconditioning", className="mokka-title"),
-        html.Div("Warm or cool the car, and set when it should do it automatically.",
-                 className="mokka-subtitle"),
+        html.H1("Home", className="visually-hidden"),  # for screen readers; on screen it's obvious
 
+        html.H2("Car status", className="mk-section-title"),
         _status_cards(car),
 
+        html.H2("Preconditioning", className="mk-section-title"),
+        html.Div("Warm or cool the car, and set when it should do it automatically.",
+                 className="mokka-subtitle"),
         html.Div(className="mk-toggle-card", children=[
             dbc.Switch(id="mokka-precond-toggle", value=_precond_on_state(car),
                        label="Precondition now", className="mk-big-switch"),
@@ -143,7 +146,7 @@ def get_precond_layout():
             html.Div(id="mokka-precond-status", className="mk-status"),
         ]),
 
-        html.Div(className="mk-section-title", children="Weekly schedules"),
+        html.H3("Weekly schedules", className="mk-section-title"),
         html.Div("Changes apply the next time the car is awake — not always straight away.",
                  className="mokka-subtitle"),
         html.Div(schedule_rows),

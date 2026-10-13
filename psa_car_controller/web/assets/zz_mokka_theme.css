@@ -312,7 +312,7 @@ body .dash-dropdown-trigger {
 
 /* ---- Mokka preconditioning panel ---------------------------------------- */
 
-/* The "Preconditioning" tab (precond_tab.py). Wider than the setup card: a
+/* The Home page (home.py). Wider than the setup card: a
  * single centred column holding status, the on/off toggle, and the schedules. */
 .mokka-panel {
   max-width: 44rem;
@@ -433,4 +433,77 @@ body .dash-dropdown-trigger {
 }
 .mk-err {
   color: #fca5a5;
+}
+
+/* ---- Header (views.py add_header) --------------------------------------- */
+
+/* GitHub and settings icons: Bootstrap icons in the label colour, so they show on the dark page. */
+.mk-icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--mk-radius);
+  font-size: 1.5rem;
+  color: var(--mk-label);
+}
+.mk-icon-link:hover {
+  color: var(--mk-strong);
+  background-color: var(--mk-input);
+}
+
+/* Link back to the preconditioning page from settings and the log */
+.mk-back {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.95rem;
+  text-decoration: none;
+}
+
+.mk-icon-link:focus-visible,
+.mk-back:focus-visible {
+  outline: 2px solid var(--mk-accent);
+  outline-offset: 2px;
+}
+
+/* ---- Log (config_views.py log_layout) ----------------------------------- */
+
+.mk-log-page {
+  max-width: 64rem;
+  margin: 1.5rem auto;
+}
+.mk-log-page .mokka-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+.mk-log {
+  display: flex;
+  flex-direction: column-reverse;
+  height: 75vh;
+  overflow: auto;
+  padding: 0.75rem 1rem;
+  background-color: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius);
+  color: var(--mk-label);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Home page sections (Car status, Preconditioning) sit above the smaller "Weekly schedules" heading. */
+.mokka-panel h2.mk-section-title {
+  font-size: 1.25rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+.mokka-panel h2.mk-section-title + .mokka-subtitle {
+  margin-top: -0.5rem;
+}
+/* The Home title is for screen readers only, so the first section starts at the top. */
+.mokka-panel h1.visually-hidden + h2.mk-section-title {
+  margin-top: 0;
 }

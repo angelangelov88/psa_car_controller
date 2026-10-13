@@ -1,18 +1,25 @@
 # Home Assistant app for this fork, built from source on the HA machine.
 # ha-app/sync.ps1 copies it, with the source, to HA's local apps folder.
 name: psacc (fork)
-version: "0.1.0"
+version: "0.2.0"
 slug: psacc_fork
-description: PSA Car Controller built from the angelangelov88 fork, with the new setup screens and preconditioning tab.
+description: PSA Car Controller built from the angelangelov88 fork, with the new setup screens and a single preconditioning page.
 url: https://github.com/angelangelov88/psa_car_controller
 arch:
   - amd64
 startup: application
-# Manual until the stock psacc app is switched off: two copies on one account fight over its tokens.
-boot: manual
-# Reached only through HA (sidebar and other apps); no port is opened on the network.
+# Starts with HA so the NFC tag keeps working after a restart. Don't run the stock psacc app as well:
+# two copies on one account fight over its tokens.
+boot: auto
+# Opened through HA (sidebar and other apps), behind the HA login.
 ingress: true
 ingress_port: 5000
+# Optional direct port, off by default. It has no login: anyone who can reach it can control the car.
+# Turn it on in the app's Network tab only on a network you trust.
+ports:
+  5000/tcp: null
+ports_description:
+  5000/tcp: Web UI without HA (no login)
 panel_icon: mdi:car-electric
 panel_title: psacc (fork)
 watchdog: tcp://[HOST]:[PORT:5000]

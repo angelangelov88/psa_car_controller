@@ -167,16 +167,10 @@ def log_layout():
             log_text = f.read()
     except Exception as e:
         log_text = f"Can't read log file: {e}"
-    return html.H3(className="m-2", children=["Log:", dbc.Container(
-        fluid=True,
-        style={"height": "80vh",
-               "overflow": "auto",
-               "display": "flex",
-               "flex-direction": "column-reverse",
-               "white-space": "pre-line"},
-        children=log_text,
-        className="m-3 bg-light h5"),
-        html.Div(id="empty-div")])
+    # column-reverse keeps the box scrolled to the newest lines at the bottom.
+    return html.Div(className="mk-log-page", children=[
+        html.H1("Log", className="mokka-title"),
+        html.Div(html.Div(log_text), className="mk-log")])
 
 
 def card_class(card, shown):
