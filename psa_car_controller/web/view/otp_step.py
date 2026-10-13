@@ -4,7 +4,8 @@ import math
 import re
 
 SMS_COOLDOWN_IN_S = 60
-SMS_CODE_PATTERN = re.compile(r"^\d{4,8}$")
+# Vauxhall texts 9 digits; leave room for other brands and lengths.
+SMS_CODE_PATTERN = re.compile(r"^\d{4,12}$")
 PIN_PATTERN = re.compile(r"^\d{4}$")
 SEND_LABEL = "Send me a code by SMS"
 RESEND_LABEL = "Send a new code"
@@ -15,8 +16,13 @@ CODE_REJECTED = ("That code or PIN wasn't accepted. Check both and try again. "
 FINISH_FAILED = "We couldn't finish setup just now. Try again in a moment. The log has the details."
 
 
+def clean_code(sms_code):
+    """The code without spaces, in case it is typed in groups as the text shows it."""
+    return "".join((sms_code or "").split())
+
+
 def is_code_ready(sms_code, pin):
-    return bool(sms_code and pin and SMS_CODE_PATTERN.match(sms_code.strip()) and PIN_PATTERN.match(pin.strip()))
+    return bool(SMS_CODE_PATTERN.match(clean_code(sms_code)) and pin and PIN_PATTERN.match(pin.strip()))
 
 
 def sms_button_state(sent_at, now):

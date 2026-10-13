@@ -104,6 +104,8 @@ def get_code(page: Page, scheme: str, email: str, password: str) -> str:
         if not credentials_filled and page.is_visible(EMAIL_SELECTOR):
             _fill_credentials(page, email, password)
             credentials_filled = True
+            # The login page can take a minute to load on a slow machine, so give the reply its own 90 s.
+            deadline = time.time() + 90
             continue
 
         for selector in AUTHORIZE_SELECTORS:

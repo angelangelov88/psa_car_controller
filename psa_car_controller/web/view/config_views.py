@@ -10,7 +10,7 @@ from psa_car_controller.psa.setup.app_decoder import SignInRejected
 from psa_car_controller.common.mylogger import LOG_FILE
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view.otp_step import (CODE_REJECTED, FINISH_FAILED, NOT_SIGNED_IN, SEND_LABEL, SMS_HINT,
-                                                  is_code_ready, sms_button_state, sms_failed_message)
+                                                  clean_code, is_code_ready, sms_button_state, sms_failed_message)
 from psa_car_controller.web.view.setup_flow import CodeRejected, ManualSignInNeeded, NotSignedIn, create_setup_flow
 from psa_car_controller.web.view.setup_steps import GET_CODE, SIGN_IN, step_states
 from psa_car_controller.web.view.sign_in import (BRANDS, COUNTRIES, SIGN_IN_FAILED, SIGN_IN_HINT, is_sign_in_ready,
@@ -136,7 +136,7 @@ config_otp_layout = html.Div(className="mokka-setup", children=[
             dbc.Input(type="text", id="psa-code", placeholder="Code from the text message",
                       inputmode="numeric", autocomplete="one-time-code"),
             dbc.FormText(
-                "Usually 6 digits",
+                "All the digits from the text message",
                 color="secondary",
             )]),
         html.Div(className="mb-3", children=[
@@ -343,7 +343,7 @@ def toggle_finish(sms_code, code_pin, step):
     prevent_initial_call=True)
 def finishOtp(n_clicks, code_pin, sms_code):  # pylint: disable=unused-argument
     try:
-        SETUP_FLOW.finish(sms_code.strip(), code_pin.strip())
+        SETUP_FLOW.finish(clean_code(sms_code), code_pin.strip())
     except NotSignedIn:
         return dbc.Alert(NOT_SIGNED_IN, color="danger"), True, no_update
     except CodeRejected:

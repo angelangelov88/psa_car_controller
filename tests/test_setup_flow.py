@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from psa_car_controller.psa.setup.app_decoder import SignInRejected
-from psa_car_controller.web.view.otp_step import (RESEND_LABEL, SEND_LABEL, is_code_ready, sms_button_state,
+from psa_car_controller.web.view.otp_step import (RESEND_LABEL, SEND_LABEL, clean_code, is_code_ready, sms_button_state,
                                                   sms_failed_message)
 from psa_car_controller.web.view.setup_flow import (FAKE_SETUP_ENV, CodeRejected, FakeSetupFlow, ManualSignInNeeded,
                                                     NotSignedIn, RealSetupFlow, create_setup_flow)
@@ -21,6 +21,9 @@ class TestCodeStep(unittest.TestCase):
 
     def test_code_must_be_digits_and_pin_four_digits(self):
         self.assertTrue(is_code_ready(" 123456 ", "1234"))
+        self.assertTrue(is_code_ready("123456789", "1234"))
+        self.assertTrue(is_code_ready("123 456 789", "1234"))
+        self.assertEqual(clean_code(" 123 456 789 "), "123456789")
         self.assertFalse(is_code_ready("12a456", "1234"))
         self.assertFalse(is_code_ready("123456", ""))
         self.assertFalse(is_code_ready("123456", "123"))
