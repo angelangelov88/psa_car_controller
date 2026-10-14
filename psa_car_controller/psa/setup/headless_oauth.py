@@ -38,6 +38,10 @@ AUTHORIZE_SELECTORS = [
 
 # Generous: on a small Home Assistant VM the sign-in page alone can take a minute and a half to load.
 TIMEOUT_MS = 120_000
+IDLE_LIMIT_S = 90
+MAX_WAIT_S = 300
+# Images aren't needed to sign in; skipping them saves a slow machine some work.
+BROWSER_ARGS = ["--blink-settings=imagesEnabled=false", "--disable-dev-shm-usage"]
 
 
 class HeadlessOAuthError(Exception):
@@ -100,17 +104,22 @@ def get_code(page: Page, scheme: str, email: str, password: str) -> str:
             code[0] = code_found
     page.on('request', lambda req: find_code_in_url(req.url))
 
-    deadline = time.time() + 180
+    # On a slow machine the pages build themselves from dozens of scripts and can take minutes. So wait as long
+    # as something is still loading, and give up only after IDLE_LIMIT_S of quiet or MAX_WAIT_S in all.
+    last_activity = [time.time()]
+    page.on('response', lambda _response: last_activity.__setitem__(0, time.time()))
+    give_up_at = time.time() + MAX_WAIT_S
+
     credentials_filled = False
-    while time.time() < deadline:
+    while time.time() < give_up_at and time.time() - last_activity[0] < IDLE_LIMIT_S:
         if code[0]:
             return code[0]
 
         if not credentials_filled and page.is_visible(EMAIL_SELECTOR):
             _fill_credentials(page, email, password)
             credentials_filled = True
-            # The login page can take a minute to load on a slow machine, so give the reply its own 90 s.
-            deadline = time.time() + 90
+            last_activity[0] = time.time()
+            logger.info("Credentials sent, waiting for the consent page")
             continue
 
         for selector in AUTHORIZE_SELECTORS:
@@ -129,7 +138,7 @@ def _launch_browser(p):
     headless = len(os.environ.get("NO_HEADLESS", "")) == 0
     try:
         logger.info("Launching headless chromium")
-        return p.chromium.launch(headless=headless), headless
+        return p.chromium.launch(headless=headless, args=BROWSER_ARGS), headless
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to launch chromium", exc_info=exc)
     raise PlaywrightNotInstalled("Could not launch chromium. "
