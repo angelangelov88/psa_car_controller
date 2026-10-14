@@ -39,6 +39,8 @@ AUTHORIZE_SELECTORS = [
 # Generous: on a small Home Assistant VM the sign-in page alone can take a minute and a half to load.
 TIMEOUT_MS = 120_000
 IDLE_LIMIT_S = 90
+# Sending the login form takes several requests, each slow on a busy VM.
+SUBMIT_TIMEOUT_MS = 60_000
 MAX_WAIT_S = 300
 # Images aren't needed to sign in; skipping them saves a slow machine some work.
 BROWSER_ARGS = ["--blink-settings=imagesEnabled=false", "--disable-dev-shm-usage"]
@@ -94,7 +96,7 @@ def _fill_credentials(page: Page, email, password):
         logger.warning("Remember me checkbox not found")
     submit_button = page.locator(SUBMIT_SELECTOR)
     submit_button.click()
-    submit_button.wait_for(state="detached", timeout=10_000)
+    submit_button.wait_for(state="detached", timeout=SUBMIT_TIMEOUT_MS)
 
 
 def check_for_error(page):
