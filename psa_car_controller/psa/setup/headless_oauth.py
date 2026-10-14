@@ -43,6 +43,22 @@ MAX_WAIT_S = 300
 # Images aren't needed to sign in; skipping them saves a slow machine some work.
 BROWSER_ARGS = ["--blink-settings=imagesEnabled=false", "--disable-dev-shm-usage"]
 
+# The ForgeRock pages (/am/...) load their scripts with RequireJS, which gives up when no new script arrives within
+# 7 s and leaves the page blank ("Loading..."). A busy Home Assistant VM can be that slow, so switch the limit off.
+# The pages set their own config with `var require = {...}`, so add the setting to whatever they set.
+REQUIREJS_NO_TIMEOUT = """(function () {
+  if (location.pathname.indexOf('/am/') !== 0) { return; }
+  var value = {waitSeconds: 0};
+  Object.defineProperty(window, 'require', {
+    configurable: true,
+    get: function () { return value; },
+    set: function (v) {
+      if (v && typeof v === 'object' && !('waitSeconds' in v)) { v.waitSeconds = 0; }
+      value = v;
+    }
+  });
+})();"""
+
 
 class HeadlessOAuthError(Exception):
     """Exception raised when headless OAuth fails, carrying debug info."""
@@ -153,6 +169,10 @@ def _run_headless_oauth(auth_url: str, email: str, password: str,  # pylint: dis
     def on_console(msg):
         console_logs.append(f"[{msg.type}] {msg.text}")
 
+    def on_page_error(error):
+        # Uncaught errors (such as a script loader giving up) don't reach the console handler.
+        console_logs.append(f"[pageerror] {str(error).splitlines()[0]}")
+
     def on_response(response):
         logger.debug("Response: %s %s", response.status, response.url)
         console_logs.append(f"[response] {response.status} {response.url}")
@@ -163,6 +183,7 @@ def _run_headless_oauth(auth_url: str, email: str, password: str,  # pylint: dis
     with playwright_sync.sync_playwright() as p:
         browser, headless = _launch_browser(p)
         context = browser.new_context()
+        context.add_init_script(REQUIREJS_NO_TIMEOUT)
         pages = []
 
         def on_popup(popup):
@@ -171,6 +192,7 @@ def _run_headless_oauth(auth_url: str, email: str, password: str,  # pylint: dis
         try:
             page = context.new_page()
             page.on("console", on_console)
+            page.on("pageerror", on_page_error)
             page.on("response", on_response)
             page.on("popup", on_popup)
             page.goto(auth_url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
