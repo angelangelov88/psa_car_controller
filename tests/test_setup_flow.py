@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from psa_car_controller.psa.setup.app_decoder import SignInRejected
 from psa_car_controller.web.view.otp_step import (RESEND_LABEL, SEND_LABEL, clean_code, is_code_ready, sms_button_state,
@@ -111,6 +111,27 @@ class TestFakeSetupFlow(unittest.TestCase):
         flow.sign_in(VAUXHALL, "me@example.com", "password", "GB")
         with self.assertRaises(CodeRejected):
             flow.finish("000000", "1234")
+
+
+class TestRealSetupFlow(unittest.TestCase):
+
+    def test_finish_drops_the_remote_token_from_the_old_session(self):
+        # GIVEN a signed-in app that still holds a remote token made with the previous SMS code and PIN
+        app = MagicMock()
+        app.myp.remote_client.remoteCredentials.refresh_token = "old_remote_refresh_token"
+        refresh_tokens_at_start = []
+        app.start_remote_control.side_effect = lambda: refresh_tokens_at_start.append(
+            app.myp.remote_client.remoteCredentials.refresh_token)
+
+        # WHEN the new SMS code and PIN are accepted
+        with patch("psa_car_controller.web.view.setup_flow.PSACarController", return_value=app), \
+                patch("psa_car_controller.web.view.setup_flow.new_otp_session") as new_session:
+            RealSetupFlow().finish("123456", "1234")
+
+        # THEN remote control restarts without the old token, so it makes a new one from the new session
+        self.assertEqual(new_session.return_value, app.myp.remote_client.otp)
+        self.assertEqual([None], refresh_tokens_at_start)
+        app.myp.save_config.assert_called_once()
 
 
 if __name__ == '__main__':

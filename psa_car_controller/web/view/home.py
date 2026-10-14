@@ -17,7 +17,8 @@ from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, validate_preco
 from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.web.app import dash_app
-from psa_car_controller.web.view.status_text import format_mileage
+from psa_car_controller.web.view.status_text import (MIN_PRECOND_BATTERY, battery_too_low_to_precondition,
+                                                     format_mileage)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,14 @@ def _precond_on_state(car):
         return car.status.preconditionning.air_conditioning.status != "Disabled"
     except (AttributeError, TypeError):
         return False
+
+
+def _battery_level(car):
+    return _status_value(lambda: car.status.get_energy('Electric').level, default=None)
+
+
+def _too_low_text(battery):
+    return f"Battery is {battery}%. Preconditioning needs at least {MIN_PRECOND_BATTERY}%."
 
 
 def _schedule_row(index, program):
@@ -128,6 +137,11 @@ def get_home_layout():
         for i, key in enumerate(PRECOND_PROGRAM_KEYS)
     ]
 
+    precond_on = _precond_on_state(car)
+    battery = _battery_level(car)
+    # Turning it off always stays possible.
+    too_low = not precond_on and battery_too_low_to_precondition(battery)
+
     return html.Div(className="mokka-panel", children=[
         html.H1("Home", className="visually-hidden"),  # for screen readers; on screen it's obvious
 
@@ -138,12 +152,13 @@ def get_home_layout():
         html.Div("Warm or cool the car, and set when it should do it automatically.",
                  className="mokka-subtitle"),
         html.Div(className="mk-toggle-card", children=[
-            dbc.Switch(id="mokka-precond-toggle", value=_precond_on_state(car),
+            dbc.Switch(id="mokka-precond-toggle", value=precond_on, disabled=too_low,
                        label="Precondition now", className="mk-big-switch"),
             html.Div(
                 "Turning this on wakes the car and starts climate control straight away.",
                 className="mokka-subtitle mb-0"),
-            html.Div(id="mokka-precond-status", className="mk-status"),
+            html.Div(id="mokka-precond-status", className="mk-status",
+                     children=html.Span(_too_low_text(battery), className="mk-err") if too_low else None),
         ]),
 
         html.H3("Weekly schedules", className="mk-section-title"),
@@ -166,6 +181,9 @@ def toggle_precond(value):
     car = _get_car()
     if car is None:
         return html.Span("No car found.", className="mk-err")
+    # The switch is disabled when the page loads with a low battery; this covers a page left open while it drains.
+    if value and battery_too_low_to_precondition(_battery_level(car)):
+        return html.Span(_too_low_text(_battery_level(car)) + " Nothing sent.", className="mk-err")
     try:
         APP.myp.remote_client.preconditioning(car.vin, bool(value))
     except Exception:  # pylint: disable=broad-except

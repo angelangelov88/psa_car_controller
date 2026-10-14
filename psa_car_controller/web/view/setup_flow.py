@@ -92,6 +92,9 @@ class RealSetupFlow:
             logger.exception("finishOtp:")
             raise CodeRejected() from e
         app.myp.remote_client.otp = otp_session
+        # A remote token made with the previous code and PIN may no longer be accepted: drop it, so remote control
+        # makes a new one from this session.
+        app.myp.remote_client.remoteCredentials.refresh_token = None
         app.myp.save_config()
         app.start_remote_control()
 
