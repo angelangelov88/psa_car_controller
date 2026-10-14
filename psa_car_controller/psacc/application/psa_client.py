@@ -47,6 +47,9 @@ class PSAClient:
         self.country_code = country_code
         self.manager = OpenIdCredentialManager.create(self.service_information,
                                                       realm_info[self.realm]["scheme"], self.country_code)
+        # Each refresh replaces the refresh token and spends the old one: save it straight away, or an app stopped
+        # before the next timed save (e.g. by an update) comes back signed out.
+        self.manager.refresh_callbacks.append(self.save_config)
         self.api_config = Oauth2PSACCApiConfig()
         self.api_config.set_refresh_callback(self.manager.refresh_token_now)
         self.manager.refresh_token = refresh_token
