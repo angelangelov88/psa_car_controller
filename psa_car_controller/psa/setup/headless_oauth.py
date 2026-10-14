@@ -21,6 +21,9 @@ REMEMBER_ME_SELECTOR = 'label[for="gigya-checkbox-remember"]'
 
 # ForgeRock AM consent page selectors
 AUTHORIZE_SELECTORS = [
+    # Stellantis's "Log in complete, ready to explore?" page (seen on Vauxhall, 2026-10).
+    '#consentbutton',
+    'input[type="submit"][value="CONTINUE"]',
     'input[name="decision"][value="allow"]',
     'button[name="decision"][value="allow"]',
     '#allow',
@@ -30,9 +33,11 @@ AUTHORIZE_SELECTORS = [
     'input[type="submit"][value="Erlauben"]',
     'input[type="submit"][value="Autoriser"]',
     '#cvs_from input[type="submit"]',
+    '#cvs_form input[type="submit"]',
 ]
 
-TIMEOUT_MS = 60_000
+# Generous: on a small Home Assistant VM the sign-in page alone can take a minute and a half to load.
+TIMEOUT_MS = 120_000
 
 
 class HeadlessOAuthError(Exception):
@@ -95,7 +100,7 @@ def get_code(page: Page, scheme: str, email: str, password: str) -> str:
             code[0] = code_found
     page.on('request', lambda req: find_code_in_url(req.url))
 
-    deadline = time.time() + 90
+    deadline = time.time() + 180
     credentials_filled = False
     while time.time() < deadline:
         if code[0]:

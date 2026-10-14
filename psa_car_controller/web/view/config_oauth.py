@@ -21,10 +21,11 @@ def get_oauth_config_layout(redirect_url):
                  className="mokka-subtitle"),
         html.Ol(className="mb-3", children=[
             html.Li(html.A("Open the Stellantis login page", href=redirect_url, target="_blank")),
-            html.Li("Sign in there until you see 'LOGIN SUCCESSFUL'."),
+            html.Li("Sign in there until you see 'Log in complete' (or 'Login successful'). Don't click anything yet."),
             html.Li("Open your browser's DevTools (F12) and click the 'Network' tab."),
-            html.Li("Hit the final 'OK' button under 'LOGIN SUCCESSFUL'."),
-            html.Li("In the Network tab, find: xxxx://oauth2redirect…?code=<copy this part>&scope=openid…"),
+            html.Li("Click the 'Continue' (or 'OK') button on that page."),
+            html.Li("In the Network tab, find the failed request xxxx://oauth2redirect…?code=<copy this part>&scope=…"
+                    " and paste only the code below. It works once and expires in a few minutes."),
         ]),
         html.P(html.A("More detail here",
                       href="https://github.com/flobz/psa_car_controller/discussions/779",

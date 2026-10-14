@@ -56,9 +56,9 @@ Optional direct port (no login, off by default) ─────┘
    - **Rebuild** if `version` in `config.yaml` is unchanged.
    - Otherwise **⋮ → Check for updates** in the app store, then **Update**. Changes to `config.yaml` itself,
      such as ports or boot, only apply this way.
-3. **Wait until the app has fully started before restarting it again.** That's about a minute, and the log
-   shows the car list. On start, psacc swaps its sign-in token for a new one. If the app is stopped before
-   it saves the new one, it is signed out and you have to sign in again.
+3. Avoid restarting the app within seconds of it starting. On start, psacc swaps its sign-in token for a
+   new one and saves it straight away; if it's stopped in that brief gap, it's signed out and you have to
+   sign in again.
 
 ## When something goes wrong
 

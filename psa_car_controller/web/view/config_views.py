@@ -221,7 +221,7 @@ def running_state(prefix, label, running_label, fields):
 SIGN_IN_RUNNING = running_state(
     "submit", "Sign in", "Signing in…",
     ("psa-app", "psa-email", "psa-password", "psa-countrycode", "submit-form")) + [
-    (Output("submit-hint", "children"), "Signing in to your car account. This can take up to a minute, "
+    (Output("submit-hint", "children"), "Signing in to your car account. This can take a few minutes, "
                                         "please keep this page open.", SIGN_IN_HINT),
 ]
 

@@ -99,6 +99,9 @@ class PSACarController(metaclass=Singleton):
             self.is_good = False
             self.is_good = self.myp.manager.refresh_token_now()
             if self.is_good:
+                # The refresh replaced the refresh token. Save it now: if the app is stopped before the end of
+                # startup, the old one is already spent and the next start would be signed out.
+                self.myp.save_config(self.config_name)
                 logger.info(str(self.myp.get_vehicles()))
             else:
                 if self.args.web_conf:
