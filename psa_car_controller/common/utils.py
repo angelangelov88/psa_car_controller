@@ -75,6 +75,8 @@ def nonblocking(lock):
 
 
 PRECOND_PROGRAM_KEYS = ("program1", "program2", "program3", "program4")
+# The car's "no time set" hour.
+PRECOND_UNSET_HOUR = 34
 
 
 def _is_int(value):
@@ -106,3 +108,19 @@ def validate_preconditioning_programs(programs):
             raise ValueError(f"{key}.on must be 0 or 1")
         validated[key] = {"day": day, "hour": hour, "minute": minute, "on": on}
     return validated
+
+
+def _program_meaning(program):
+    program = program or {}
+    hour = program.get("hour", PRECOND_UNSET_HOUR)
+    # An unset schedule's minute means nothing: the car can keep 7 there while the page shows 00.
+    minute = None if hour == PRECOND_UNSET_HOUR else program.get("minute", 0)
+    return [1 if d else 0 for d in program.get("day") or [0] * 7], hour, minute, 1 if program.get("on") else 0
+
+
+def same_preconditioning_programs(programs, others):
+    """True when both sets of programs would make the car do the same thing."""
+    if programs is None or others is None:
+        return False
+    return all(_program_meaning(programs.get(key)) == _program_meaning(others.get(key))
+               for key in PRECOND_PROGRAM_KEYS)

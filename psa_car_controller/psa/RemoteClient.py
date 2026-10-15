@@ -19,7 +19,7 @@ from psa_car_controller.psa.constants import INPROGRESS, DEFAULT_PRECONDITIONING
 from psa_car_controller.psa.mqtt_request import MQTTRequest
 from psa_car_controller.psa.oauth import OpenIdCredentialManager
 from psa_car_controller.common.utils import RateLimitException, rate_limit, parse_hour, TIMEOUT_IN_S, \
-    validate_preconditioning_programs
+    same_preconditioning_programs, validate_preconditioning_programs
 from psa_car_controller.psa.otp.otp import ConfigException, save_otp, load_otp
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,10 @@ MQTT_RESP_TOPIC = "psa/RemoteServices/to/cid/"
 # The car only sends its weekly preconditioning schedules when it wakes, so the last ones seen are kept here
 # across restarts. Without them a preconditioning command would send empty schedules and wipe the car's.
 PRECOND_PROGRAMS_FILE = "precond_programs.json"
+# Where a schedule sent to the car stands, see schedule_delivery.
+SCHEDULE_CONFIRMED = "confirmed"
+SCHEDULE_FAILED = "failed"
+SCHEDULE_WAITING = "waiting"
 MQTT_EVENT_TOPIC = "psa/RemoteServices/events/MPHRTServices/"
 MQTT_TOKEN_TTL = 890
 # minimum delay between two remote token refresh attempts: the broker closes the socket without
@@ -69,6 +73,10 @@ class RemoteClient:
         self.manager = manager
         self.programs_file: Optional[str] = None
         self.precond_programs = {}
+        # (time, programs) the car itself last reported, and (time, return_code) of its last answer to a
+        # /ThermalPrecond request, both by vin. They tell when a sent schedule has really reached the car.
+        self.car_programs = {}
+        self.precond_replies = {}
         self.lock_state = {}
         self.account_info = account_info
         self.headers = {
@@ -123,10 +131,13 @@ class RemoteClient:
                         logger.error("Last request might have been send twice without success")
                 elif data["return_code"] != "0":
                     logger.error('mqtt error %s : %s', data["return_code"], data.get("reason", "?"))
+                if msg.topic.endswith("/ThermalPrecond") and data.get("return_code") not in (None, "400"):
+                    self.precond_replies[data["vin"]] = (time.time(), data["return_code"])
             elif msg.topic.startswith(MQTT_EVENT_TOPIC):
                 charge_info = data["charging_state"]
                 programs = data["precond_state"].get("programs", None)
                 if programs:
+                    self.car_programs[data["vin"]] = (time.time(), programs)
                     self._remember_precond_programs(data["vin"], programs)
                 self._store_lock_state(data)
             self._fix_not_updated_api(charge_info, data["vin"])
@@ -376,9 +387,24 @@ class RemoteClient:
     def get_preconditioning_program(self, vin):
         return self.precond_programs.get(vin, DEFAULT_PRECONDITIONING_PROGRAM)
 
+    def schedule_delivery(self, vin, programs, sent_at):
+        """SCHEDULE_CONFIRMED once the car reports these programs after sent_at (a time.time() value),
+        SCHEDULE_FAILED if it answered the request with an error, SCHEDULE_WAITING until then."""
+        reported_at, reported = self.car_programs.get(vin, (0, None))
+        if reported_at >= sent_at and same_preconditioning_programs(reported, programs):
+            return SCHEDULE_CONFIRMED
+        replied_at, return_code = self.precond_replies.get(vin, (0, None))
+        if replied_at >= sent_at and return_code != "0":
+            return SCHEDULE_FAILED
+        return SCHEDULE_WAITING
+
     def has_preconditioning_program(self, vin):
         """True once the car's schedules are known: seen from the car, sent to it, or kept from a previous run."""
         return vin in self.precond_programs
+
+    def reported_preconditioning_program(self, vin):
+        """The programs the car last reported since the app started, or None before it has."""
+        return self.car_programs.get(vin, (0, None))[1]
 
     def keep_programs_in(self, programs_file):
         """Keep the schedules in this file from now on, starting with the ones saved there by a previous run."""

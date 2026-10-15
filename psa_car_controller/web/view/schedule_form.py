@@ -1,8 +1,8 @@
 """Turns the Home page's weekly schedule form into the car's four programs, kept free of Dash for unit tests."""
-from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, validate_preconditioning_programs
+from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, PRECOND_UNSET_HOUR, \
+    validate_preconditioning_programs
 
-# The car's "no time set" hour.
-UNSET_HOUR = 34
+UNSET_HOUR = PRECOND_UNSET_HOUR
 MINUTE_STEP = 10
 HOUR_OPTIONS = [{"label": "Not set", "value": ""}] + [{"label": f"{h:02d}", "value": str(h)} for h in range(24)]
 

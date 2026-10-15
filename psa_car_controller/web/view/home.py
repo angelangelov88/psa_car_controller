@@ -7,14 +7,16 @@ get/set_preconditioning_program) and reuses the shared Mokka theme in
 assets/zz_mokka_theme.css. No new car logic lives here.
 """
 import logging
+import time
 
 import dash_bootstrap_components as dbc
-from dash import dcc, html, ALL
+from dash import ALL, ctx, dcc, html, no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
-from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS
+from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, same_preconditioning_programs
 from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM
+from psa_car_controller.psa.RemoteClient import SCHEDULE_CONFIRMED, SCHEDULE_FAILED
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view.schedule_form import HOUR_OPTIONS, UNSET_HOUR, minute_options, programs_from_form
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 APP = PSACarController()
 
 DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+SAVE_LABEL = "Save schedules"
+SCHEDULE_POLL_MS = 3000
+SCHEDULE_CONFIRM_TIMEOUT_S = 180
 
 
 def _get_car():
@@ -189,18 +194,18 @@ def _schedule_row(index, program):
 def get_home_layout():
     car = _get_car()
     programs_known = False
+    reported = None
     try:
         vin = car.vin if car else None
         programs = APP.myp.remote_client.get_preconditioning_program(vin) if vin \
             else DEFAULT_PRECONDITIONING_PROGRAM
         programs_known = bool(vin) and APP.myp.remote_client.has_preconditioning_program(vin)
+        reported = APP.myp.remote_client.reported_preconditioning_program(vin) if vin else None
     except (AttributeError, TypeError):
         programs = DEFAULT_PRECONDITIONING_PROGRAM
+    shown = {key: programs.get(key, DEFAULT_PRECONDITIONING_PROGRAM[key]) for key in PRECOND_PROGRAM_KEYS}
 
-    schedule_rows = [
-        _schedule_row(i, programs.get(key, DEFAULT_PRECONDITIONING_PROGRAM[key]))
-        for i, key in enumerate(PRECOND_PROGRAM_KEYS)
-    ]
+    schedule_rows = [_schedule_row(i, shown[key]) for i, key in enumerate(PRECOND_PROGRAM_KEYS)]
 
     precond_on = _precond_on_state(car)
     battery = _battery_level(car)
@@ -227,7 +232,8 @@ def get_home_layout():
         ]),
 
         html.H3("Weekly schedules", className="mk-section-title"),
-        html.Div("Changes apply the next time the car is awake — not always straight away.",
+        html.Div("Saving sends all four to the car and waits for it to confirm. "
+                 "Save turns on once something differs from what the car last reported.",
                  className="mokka-subtitle"),
         html.Div(
             "The car hasn't sent its schedules yet, so these may not match it. Saving replaces all four.",
@@ -235,8 +241,12 @@ def get_home_layout():
         html.Div(schedule_rows),
 
         html.Div(className="mk-save-row", children=[
-            html.Div(id="mokka-sched-status", className="mk-status"),
-            dbc.Button("Save schedules", id="mokka-sched-save", color="primary"),
+            html.Div(id="mokka-sched-status", className="mk-status", role="status"),
+            dbc.Button(SAVE_LABEL, id="mokka-sched-save", color="primary",
+                       disabled=same_preconditioning_programs(shown, reported)),
+            dcc.Store(id="mokka-sched-pending"),
+            dcc.Store(id="mokka-sched-car", data=reported),
+            dcc.Interval(id="mokka-sched-poll", interval=SCHEDULE_POLL_MS, disabled=True),
         ]),
     ])
 
@@ -277,25 +287,61 @@ def toggle_precond(value):
     return html.Span("Sent — preconditioning turned off.", className="mk-ok")
 
 
+def _sched_done(message, confirmed=None):
+    """Outputs for a finished save: the message, the button label back and polling off. Once the car has confirmed,
+    its programs are what it last reported, so the button stays off until the form changes again."""
+    if confirmed is None:
+        return html.Span(message, className="mk-err"), SAVE_LABEL, False, None, True, no_update
+    return html.Span(message, className="mk-ok"), SAVE_LABEL, True, None, True, confirmed
+
+
+def _check_delivery(pending):
+    car = _get_car()
+    if not pending or car is None:
+        return _sched_done("No car found.")
+    state = APP.myp.remote_client.schedule_delivery(car.vin, pending["programs"], pending["sent_at"])
+    if state == SCHEDULE_CONFIRMED:
+        return _sched_done("Done — the car has the new schedules.", pending["programs"])
+    if state == SCHEDULE_FAILED:
+        return _sched_done("The car couldn't apply the schedules. Try again in a moment.")
+    if time.time() - pending["sent_at"] > SCHEDULE_CONFIRM_TIMEOUT_S:
+        return _sched_done("No answer from the car after 3 minutes, so the change may not have reached it. "
+                           "Try saving again later.")
+    raise PreventUpdate()
+
+
 @dash_app.callback(
     Output("mokka-sched-status", "children"),
+    Output("mokka-sched-save", "children"),
+    Output("mokka-sched-save", "disabled"),
+    Output("mokka-sched-pending", "data"),
+    Output("mokka-sched-poll", "disabled"),
+    Output("mokka-sched-car", "data"),
     Input("mokka-sched-save", "n_clicks"),
+    Input("mokka-sched-poll", "n_intervals"),
+    State("mokka-sched-pending", "data"),
     State({"type": "mk-sched-on", "index": ALL}, "value"),
     State({"type": "mk-sched-hour", "index": ALL}, "value"),
     State({"type": "mk-sched-minute", "index": ALL}, "value"),
     State({"type": "mk-sched-days", "index": ALL}, "value"),
     prevent_initial_call=True)
-def save_schedules(n_clicks, ons, hours, minutes, days):  # pylint: disable=unused-argument
+def save_schedules(n_clicks, n_intervals, pending, ons, hours, minutes, days):  # pylint: disable=unused-argument
+    """Sends the schedules, then checks every few seconds until the car reports them back, like the NFC tag's
+    automation does after a preconditioning command."""
+    # pylint: disable=too-many-arguments,too-many-positional-arguments  # Dash passes each input and state in turn
+    if ctx.triggered_id == "mokka-sched-poll":
+        return _check_delivery(pending)
     if not n_clicks:
         raise PreventUpdate()
     car = _get_car()
     if car is None:
-        return html.Span("No car found.", className="mk-err")
+        return _sched_done("No car found.")
 
     programs, problem = programs_from_form(ons, hours, minutes, days)
     if problem:
-        return html.Span(problem, className="mk-err")
+        return _sched_done(problem)
 
+    sent_at = time.time()
     try:
         published = APP.myp.remote_client.set_preconditioning_program(car.vin, programs)
     except Exception:  # pylint: disable=broad-except
@@ -303,5 +349,27 @@ def save_schedules(n_clicks, ons, hours, minutes, days):  # pylint: disable=unus
         published = False
 
     if not published:
-        return html.Span("Couldn't reach the car — schedules not sent.", className="mk-err")
-    return html.Span("Update sent — applies next time the car is awake.", className="mk-ok")
+        return _sched_done("Couldn't reach the car — schedules not sent.")
+    waiting_button = [html.Span(className="spinner-border spinner-border-sm me-2", **{"aria-hidden": "true"}),
+                      "Waiting for the car…"]
+    return (html.Span("Sent. Waiting for the car to confirm — usually under a minute."), waiting_button, True,
+            {"sent_at": sent_at, "programs": programs}, False, no_update)
+
+
+@dash_app.callback(
+    Output("mokka-sched-save", "disabled", allow_duplicate=True),
+    Input({"type": "mk-sched-on", "index": ALL}, "value"),
+    Input({"type": "mk-sched-hour", "index": ALL}, "value"),
+    Input({"type": "mk-sched-minute", "index": ALL}, "value"),
+    Input({"type": "mk-sched-days", "index": ALL}, "value"),
+    State("mokka-sched-car", "data"),
+    State("mokka-sched-pending", "data"),
+    prevent_initial_call=True)
+def update_save_button(ons, hours, minutes, days, reported, pending):
+    """Save is off while the form matches what the car last reported. A form that can't be sent stays clickable,
+    so Save can say what to fix."""
+    # pylint: disable=too-many-arguments,too-many-positional-arguments  # Dash passes each input and state in turn
+    if pending:
+        raise PreventUpdate()  # the button shows "Waiting for the car…" until it answers
+    programs, problem = programs_from_form(ons, hours, minutes, days)
+    return not problem and same_preconditioning_programs(programs, reported)
