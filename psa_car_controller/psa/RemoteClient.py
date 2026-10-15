@@ -37,6 +37,13 @@ PRECOND_PROGRAMS_FILE = "precond_programs.json"
 SCHEDULE_CONFIRMED = "confirmed"
 SCHEDULE_FAILED = "failed"
 SCHEDULE_WAITING = "waiting"
+SCHEDULE_WAKING = "waking"
+# The car sleeps soon after it last spoke: on 2026-10-15 the server called it asleep 104 s after an answer. From
+# midday that day every schedule sent to the sleeping car timed out, while a /VehCharge/state request still woke it,
+# so a schedule for a car not heard from within AWAKE_WINDOW_S goes once a wakeup gets an answer, if that comes
+# within WAKEUP_WAIT_S. Waiting any longer could send it hours later, when the user no longer expects it.
+AWAKE_WINDOW_S = 60
+WAKEUP_WAIT_S = 180
 MQTT_EVENT_TOPIC = "psa/RemoteServices/events/MPHRTServices/"
 MQTT_TOKEN_TTL = 890
 # minimum delay between two remote token refresh attempts: the broker closes the socket without
@@ -77,6 +84,9 @@ class RemoteClient:
         # /ThermalPrecond request, both by vin. They tell when a sent schedule has really reached the car.
         self.car_programs = {}
         self.precond_replies = {}
+        # time.time() the car last answered or sent an event, and (time, request) to send once it wakes, by vin
+        self.car_heard = {}
+        self.after_wakeup = {}
         self.lock_state = {}
         self.account_info = account_info
         self.headers = {
@@ -130,14 +140,21 @@ class RemoteClient:
                         logger.error("Last request might have been send twice without success")
                 elif data["return_code"] != "0":
                     logger.error('mqtt error %s : %s', data["return_code"], data.get("reason", "?"))
+                else:
+                    self.car_heard[data["vin"]] = time.time()
                 if msg.topic.endswith("/ThermalPrecond") and data.get("return_code") not in (None, "400"):
                     self.precond_replies[data["vin"]] = (time.time(), data["return_code"])
+                if msg.topic.endswith("/VehCharge/state") and data.get("return_code") not in (None, "400"):
+                    # Sent even when the wakeup failed: the server then tries to wake the car itself, as it did before.
+                    self._send_after_wakeup(data["vin"])
             elif msg.topic.startswith(MQTT_EVENT_TOPIC):
                 programs = data["precond_state"].get("programs", None)
                 if programs:
                     self.car_programs[data["vin"]] = (time.time(), programs)
                     self._remember_precond_programs(data["vin"], programs)
                 self._store_lock_state(data)
+                self.car_heard[data["vin"]] = time.time()
+                self._send_after_wakeup(data["vin"])
         except KeyError:
             logger.exception("on_mqtt_message:")
 
@@ -345,8 +362,38 @@ class RemoteClient:
         logger.info("ask wakeup to %s", vin)
         msg = self.mqtt_request(vin, {"action": "state"}, "/VehCharge/state")
         logger.info(msg)
-        self.publish(msg)
-        return True
+        return self.publish(msg)
+
+    def heard_since(self, vin, since):
+        """True once the car has answered or sent an event after since (a time.time() value)."""
+        return self.car_heard.get(vin, 0) >= since
+
+    def _publish_when_awake(self, vin, request) -> bool:
+        if time.time() - self.car_heard.get(vin, 0) < AWAKE_WINDOW_S:
+            return self.publish(request)
+        self.after_wakeup[vin] = (time.time(), request)
+        try:
+            woken = self.wakeup(vin)
+        except RateLimitException:
+            logger.warning("wakeup limit reached, sending %s to the car without one", request.topic)
+            self.after_wakeup.pop(vin, None)
+            return self.publish(request)
+        if not woken:
+            self.after_wakeup.pop(vin, None)
+        return woken
+
+    def _waiting_for_wakeup(self, vin):
+        queued_at, _ = self.after_wakeup.get(vin, (0, None))
+        return time.time() - queued_at < WAKEUP_WAIT_S
+
+    def _send_after_wakeup(self, vin):
+        if not self._waiting_for_wakeup(vin):
+            self.after_wakeup.pop(vin, None)
+            return
+        _, request = self.after_wakeup.pop(vin)
+        logger.info("car is awake, sending %s", request.topic)
+        # Not on the mqtt thread: publish can refresh the token over http, which would hold up the connection.
+        threading.Thread(target=self.publish, args=(request,), daemon=True).start()
 
     def lock_door(self, vin, lock: bool):
         if lock:
@@ -378,10 +425,13 @@ class RemoteClient:
 
     def schedule_delivery(self, vin, programs, sent_at):
         """SCHEDULE_CONFIRMED once the car reports these programs after sent_at (a time.time() value),
-        SCHEDULE_FAILED if it answered the request with an error, SCHEDULE_WAITING until then."""
+        SCHEDULE_FAILED if it answered the request with an error, SCHEDULE_WAKING while they wait for the car to wake
+        and SCHEDULE_WAITING until it answers."""
         reported_at, reported = self.car_programs.get(vin, (0, None))
         if reported_at >= sent_at and same_preconditioning_programs(reported, programs):
             return SCHEDULE_CONFIRMED
+        if self._waiting_for_wakeup(vin):
+            return SCHEDULE_WAKING
         replied_at, return_code = self.precond_replies.get(vin, (0, None))
         if replied_at >= sent_at and return_code != "0":
             return SCHEDULE_FAILED
@@ -435,7 +485,7 @@ class RemoteClient:
         # received.
         msg = self.mqtt_request(vin, {"asap": "deactivate", "programs": programs}, "/ThermalPrecond")
         logger.info("set_preconditioning_program: %s", msg)
-        published = self.publish(msg)
+        published = self._publish_when_awake(vin, msg)
         if published:
             self._remember_precond_programs(vin, programs)
         return published

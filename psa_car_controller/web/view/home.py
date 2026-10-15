@@ -14,9 +14,9 @@ from dash import ALL, ctx, dcc, html, no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
-from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, same_preconditioning_programs
+from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, RateLimitException, same_preconditioning_programs
 from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM
-from psa_car_controller.psa.RemoteClient import SCHEDULE_CONFIRMED, SCHEDULE_FAILED
+from psa_car_controller.psa.RemoteClient import SCHEDULE_CONFIRMED, SCHEDULE_FAILED, SCHEDULE_WAKING
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view.schedule_form import HOUR_OPTIONS, UNSET_HOUR, minute_options, programs_from_form
@@ -32,7 +32,13 @@ APP = PSACarController()
 DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 SAVE_LABEL = "Save schedules"
 SCHEDULE_POLL_MS = 3000
-SCHEDULE_CONFIRM_TIMEOUT_S = 180
+# Waking a sleeping car takes up to 2.5 minutes before the schedules even go, see RemoteClient.AWAKE_WINDOW_S.
+SCHEDULE_CONFIRM_TIMEOUT_S = 300
+STATUS_UPDATE_TIMEOUT_S = 180
+# The server can lag behind the car, so after it answers, its new values are fetched again for up to this long.
+STATUS_FRESH_WAIT_S = 30
+# A value from the car's clock counts as new if it's at most this much older than the Update click.
+STATUS_CLOCK_SLACK_S = 120
 
 
 def _get_car():
@@ -46,6 +52,14 @@ def _read(getter):
         return getter()
     except (AttributeError, TypeError, KeyError, IndexError):
         return None
+
+
+def _busy_label(text):
+    return [html.Span(className="spinner-border spinner-border-sm me-2", **{"aria-hidden": "true"}), text]
+
+
+def _update_label():
+    return ["Update", html.Span(" car status", className="visually-hidden")]
 
 
 def _stat_tile(label, value, sub=None):
@@ -217,8 +231,15 @@ def get_home_layout():
     return html.Div(className="mokka-panel", children=[
         html.H1("Home", className="visually-hidden"),  # for screen readers; on screen it's obvious
 
-        html.H2("Car status", className="mk-section-title"),
-        _status_cards(car),
+        html.Div(className="mk-section-head", children=[
+            html.H2("Car status", className="mk-section-title"),
+            dbc.Button(_update_label(), id="mokka-status-update", color="secondary", size="sm",
+                       disabled=car is None),
+        ]),
+        html.Div(id="mokka-status-msg", className="mk-status", role="status"),
+        html.Div(_status_cards(car), id="mokka-status-cards"),
+        dcc.Store(id="mokka-status-pending"),
+        dcc.Interval(id="mokka-status-poll", interval=SCHEDULE_POLL_MS, disabled=True),
 
         html.H2("Preconditioning", className="mk-section-title"),
         html.Div("Warm or cool the car, and set when it should do it automatically.",
@@ -234,7 +255,7 @@ def get_home_layout():
         ]),
 
         html.H3("Weekly schedules", className="mk-section-title"),
-        html.Div("Saving sends all four to the car and waits for it to confirm. "
+        html.Div("Saving sends all four to the car, waking it first if it's asleep, and waits for it to confirm. "
                  "Save turns on once something differs from what the car last reported.",
                  className="mokka-subtitle"),
         html.Div(
@@ -297,6 +318,18 @@ def _sched_done(message, confirmed=None):
     return html.Span(message, className="mk-ok"), SAVE_LABEL, True, None, True, confirmed
 
 
+def _sched_progress(state, pending):
+    """Outputs while a save is under way. They only change when it moves on to the next step."""
+    if pending.get("step") == state:
+        raise PreventUpdate()
+    if state == SCHEDULE_WAKING:
+        message = "The car is asleep, so it's being woken first. This can take a minute or two."
+        label = "Waking the car…"
+    else:
+        message, label = "Sent. Waiting for the car to confirm — usually under a minute.", "Waiting for the car…"
+    return html.Span(message), _busy_label(label), True, dict(pending, step=state), False, no_update
+
+
 def _check_delivery(pending):
     car = _get_car()
     if not pending or car is None:
@@ -305,11 +338,11 @@ def _check_delivery(pending):
     if state == SCHEDULE_CONFIRMED:
         return _sched_done("Done — the car has the new schedules.", pending["programs"])
     if state == SCHEDULE_FAILED:
-        return _sched_done("The car couldn't apply the schedules. Try again in a moment.")
+        return _sched_done("The car didn't take the schedules. It may be out of signal; try again in a few minutes.")
     if time.time() - pending["sent_at"] > SCHEDULE_CONFIRM_TIMEOUT_S:
-        return _sched_done("No answer from the car after 3 minutes, so the change may not have reached it. "
+        return _sched_done("No answer from the car after 5 minutes, so the change may not have reached it. "
                            "Try saving again later.")
-    raise PreventUpdate()
+    return _sched_progress(state, pending)
 
 
 @dash_app.callback(
@@ -352,10 +385,8 @@ def save_schedules(n_clicks, n_intervals, pending, ons, hours, minutes, days):  
 
     if not published:
         return _sched_done("Couldn't reach the car — schedules not sent.")
-    waiting_button = [html.Span(className="spinner-border spinner-border-sm me-2", **{"aria-hidden": "true"}),
-                      "Waiting for the car…"]
-    return (html.Span("Sent. Waiting for the car to confirm — usually under a minute."), waiting_button, True,
-            {"sent_at": sent_at, "programs": programs}, False, no_update)
+    pending = {"sent_at": sent_at, "programs": programs}
+    return _sched_progress(APP.myp.remote_client.schedule_delivery(car.vin, programs, sent_at), pending)
 
 
 # Sending takes a few seconds, so the button changes in the browser straight away, which also stops a second click
@@ -387,6 +418,83 @@ def update_save_button(ons, hours, minutes, days, reported, label):
     so Save can say what to fix. The last save's message goes, as it's about the form before this change."""
     # pylint: disable=too-many-arguments,too-many-positional-arguments  # Dash passes each input and state in turn
     if label != SAVE_LABEL:
-        raise PreventUpdate()  # the button shows "Sending…" or "Waiting for the car…" until the car answers
+        raise PreventUpdate()  # the button shows "Sending…", "Waking the car…" or "Waiting for the car…" meanwhile
     programs, problem = programs_from_form(ons, hours, minutes, days)
     return not problem and same_preconditioning_programs(programs, reported), None
+
+
+def _update_done(message, cards=no_update, ok=False):
+    """Outputs for a finished Update: the message, the button back, polling off and the new tiles if there are any."""
+    return html.Span(message, className="mk-ok" if ok else "mk-err"), _update_label(), False, None, True, cards
+
+
+def _status_is_new(status, asked_at):
+    updated_at = _read(lambda: status.get_energy('Electric').updated_at)
+    return updated_at is not None and updated_at.timestamp() >= asked_at - STATUS_CLOCK_SLACK_S
+
+
+def _check_status_update(pending):
+    car = _get_car()
+    if not pending or car is None:
+        return _update_done("No car found.")
+    asked_at = pending["asked_at"]
+    if not APP.myp.remote_client.heard_since(car.vin, asked_at):
+        if time.time() - asked_at > STATUS_UPDATE_TIMEOUT_S:
+            return _update_done("The car didn't answer. It may be out of signal; try again later.")
+        raise PreventUpdate()
+    heard_at = pending.get("heard_at") or time.time()
+    status = APP.myp.get_vehicle_info(car.vin)
+    if _status_is_new(status, asked_at):
+        return _update_done("Up to date.", _status_cards(car), ok=True)
+    if time.time() - heard_at > STATUS_FRESH_WAIT_S:
+        return _update_done("The car answered, but its new values haven't reached the server yet. "
+                            "Try again in a minute.", _status_cards(car))
+    if pending.get("heard_at"):
+        raise PreventUpdate()
+    return no_update, _busy_label("Getting the new values…"), True, dict(pending, heard_at=heard_at), False, no_update
+
+
+@dash_app.callback(
+    Output("mokka-status-msg", "children"),
+    Output("mokka-status-update", "children"),
+    Output("mokka-status-update", "disabled"),
+    Output("mokka-status-pending", "data"),
+    Output("mokka-status-poll", "disabled"),
+    Output("mokka-status-cards", "children"),
+    Input("mokka-status-update", "n_clicks"),
+    Input("mokka-status-poll", "n_intervals"),
+    State("mokka-status-pending", "data"),
+    prevent_initial_call=True)
+def update_status(n_clicks, n_intervals, pending):  # pylint: disable=unused-argument
+    """Wakes the car, then checks every few seconds until it answers and shows what it sent."""
+    if ctx.triggered_id == "mokka-status-poll":
+        return _check_status_update(pending)
+    car = _get_car()
+    if car is None:
+        return _update_done("No car found.")
+    asked_at = time.time()
+    try:
+        woken = APP.myp.remote_client.wakeup(car.vin)
+    except RateLimitException:
+        return _update_done("The car can be woken 6 times in 20 minutes, and that's used up. "
+                            "Try again in a few minutes.")
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("update_status:")
+        woken = False
+    if not woken:
+        return _update_done("Couldn't reach the car. Try again in a moment.")
+    return None, _busy_label("Waking the car…"), True, {"asked_at": asked_at}, False, no_update
+
+
+# As with Save, the button changes in the browser straight away; update_status' answer replaces it.
+dash_app.clientside_callback(
+    """function() {
+        const spinner = {namespace: "dash_html_components", type: "Span",
+                         props: {className: "spinner-border spinner-border-sm me-2", "aria-hidden": "true"}};
+        return [true, [spinner, "Waking the car…"], null];
+    }""",
+    Output("mokka-status-update", "disabled", allow_duplicate=True),
+    Output("mokka-status-update", "children", allow_duplicate=True),
+    Output("mokka-status-msg", "children", allow_duplicate=True),
+    Input("mokka-status-update", "n_clicks"),
+    prevent_initial_call=True)
