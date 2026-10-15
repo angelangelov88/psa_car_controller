@@ -38,10 +38,15 @@ SCHEDULE_CONFIRMED = "confirmed"
 SCHEDULE_FAILED = "failed"
 SCHEDULE_WAITING = "waiting"
 SCHEDULE_WAKING = "waking"
+SCHEDULE_NOT_WOKEN = "not_woken"
+# preconditioning_result before any preconditioning command, which otherwise uses the SCHEDULE_ states
+PRECOND_NONE = "none"
 # The car sleeps soon after it last spoke: on 2026-10-15 the server called it asleep 104 s after an answer. From
 # midday that day every schedule sent to the sleeping car timed out, while a /VehCharge/state request still woke it,
 # so a schedule for a car not heard from within AWAKE_WINDOW_S goes once a wakeup gets an answer, if that comes
-# within WAKEUP_WAIT_S. Waiting any longer could send it hours later, when the user no longer expects it.
+# within WAKEUP_WAIT_S. Waiting any longer could send it hours later, when the user no longer expects it. A car that
+# doesn't answer the wakeup isn't sent it at all: at 17:39 that day schedules sent after a timed out wakeup timed out
+# too, so sending them only kept the user waiting another 2.5 minutes for the same answer.
 AWAKE_WINDOW_S = 60
 WAKEUP_WAIT_S = 180
 MQTT_EVENT_TOPIC = "psa/RemoteServices/events/MPHRTServices/"
@@ -87,6 +92,10 @@ class RemoteClient:
         # time.time() the car last answered or sent an event, and (time, request) to send once it wakes, by vin
         self.car_heard = {}
         self.after_wakeup = {}
+        # (time, return_code) of the last answer to a wakeup, by vin
+        self.wake_replies = {}
+        # (time, activate, request or None if it couldn't be sent) of the last preconditioning(), by vin
+        self.precond_sent = {}
         self.lock_state = {}
         self.account_info = account_info
         self.headers = {
@@ -145,7 +154,7 @@ class RemoteClient:
                 if msg.topic.endswith("/ThermalPrecond") and data.get("return_code") not in (None, "400"):
                     self.precond_replies[data["vin"]] = (time.time(), data["return_code"])
                 if msg.topic.endswith("/VehCharge/state") and data.get("return_code") not in (None, "400"):
-                    # Sent even when the wakeup failed: the server then tries to wake the car itself, as it did before.
+                    self.wake_replies[data["vin"]] = (time.time(), data["return_code"])
                     self._send_after_wakeup(data["vin"])
             elif msg.topic.startswith(MQTT_EVENT_TOPIC):
                 programs = data["precond_state"].get("programs", None)
@@ -371,7 +380,11 @@ class RemoteClient:
     def _publish_when_awake(self, vin, request) -> bool:
         if time.time() - self.car_heard.get(vin, 0) < AWAKE_WINDOW_S:
             return self.publish(request)
-        self.after_wakeup[vin] = (time.time(), request)
+        if self._waiting_for_wakeup(vin):
+            # a wakeup is already on its way, so this one goes with the others when it gets an answer
+            self.after_wakeup[vin][1].append(request)
+            return True
+        self.after_wakeup[vin] = (time.time(), [request])
         try:
             woken = self.wakeup(vin)
         except RateLimitException:
@@ -382,18 +395,34 @@ class RemoteClient:
             self.after_wakeup.pop(vin, None)
         return woken
 
+    def wakeup_failed_since(self, vin, since):
+        """True once a wakeup got an error back after since (a time.time() value): the car didn't answer it."""
+        replied_at, return_code = self.wake_replies.get(vin, (0, None))
+        return replied_at >= since and return_code != "0"
+
     def _waiting_for_wakeup(self, vin):
-        queued_at, _ = self.after_wakeup.get(vin, (0, None))
-        return time.time() - queued_at < WAKEUP_WAIT_S
+        queued_at, _ = self.after_wakeup.get(vin, (0, []))
+        return time.time() - queued_at < WAKEUP_WAIT_S and not self.wakeup_failed_since(vin, queued_at)
+
+    def _not_woken(self, vin, since):
+        """True when requests queued after since were never sent, because the car didn't wake for them."""
+        queued_at, requests = self.after_wakeup.get(vin, (0, []))
+        return bool(requests) and queued_at >= since and not self._waiting_for_wakeup(vin)
+
+    def _queued_for_wakeup(self, request):
+        """True while request waits for the car to wake, and after the car didn't wake for it."""
+        return any(request in requests for _, requests in self.after_wakeup.values())
 
     def _send_after_wakeup(self, vin):
+        # Requests the car didn't wake for stay queued, so schedule_delivery and preconditioning_result can tell they
+        # were never sent.
         if not self._waiting_for_wakeup(vin):
-            self.after_wakeup.pop(vin, None)
             return
-        _, request = self.after_wakeup.pop(vin)
-        logger.info("car is awake, sending %s", request.topic)
-        # Not on the mqtt thread: publish can refresh the token over http, which would hold up the connection.
-        threading.Thread(target=self.publish, args=(request,), daemon=True).start()
+        _, requests = self.after_wakeup.pop(vin)
+        for request in requests:
+            logger.info("car is awake, sending %s", request.topic)
+            # Not on the mqtt thread: publish can refresh the token over http, which would hold up the connection.
+            threading.Thread(target=self.publish, args=(request,), daemon=True).start()
 
     def lock_door(self, vin, lock: bool):
         if lock:
@@ -417,21 +446,45 @@ class RemoteClient:
             programs = DEFAULT_PRECONDITIONING_PROGRAM
         msg = self.mqtt_request(vin, {"asap": value, "programs": programs}, "/ThermalPrecond")
         logger.info("Preconditioning: %s", msg)
-        self.publish(msg)
-        return True
+        published = self._publish_when_awake(vin, msg)
+        self.precond_sent[vin] = (time.time(), activate, msg if published else None)
+        return published
+
+    def preconditioning_result(self, vin):
+        """Where the last preconditioning() for this car stands, for Home Assistant to poll: "state" is PRECOND_NONE
+        before any, SCHEDULE_WAKING while it waits for the car to wake, SCHEDULE_WAITING once sent until the car
+        answers, then SCHEDULE_CONFIRMED or SCHEDULE_FAILED. A failure has the server's "return_code", or none if the
+        command never left: it couldn't be sent, or the car didn't wake for it."""
+        if vin not in self.precond_sent:
+            return {"state": PRECOND_NONE}
+        sent_at, activate, request = self.precond_sent[vin]
+        result = {"activate": bool(activate), "seconds_ago": round(time.time() - sent_at)}
+        replied_at, return_code = self.precond_replies.get(vin, (0, None))
+        if request is None:
+            return dict(result, state=SCHEDULE_FAILED, return_code=None)
+        if self._queued_for_wakeup(request):
+            if self._waiting_for_wakeup(vin):
+                return dict(result, state=SCHEDULE_WAKING)
+            return dict(result, state=SCHEDULE_FAILED, return_code=None)
+        if replied_at < sent_at:
+            return dict(result, state=SCHEDULE_WAITING)
+        state = SCHEDULE_CONFIRMED if return_code == "0" else SCHEDULE_FAILED
+        return dict(result, state=state, return_code=return_code)
 
     def get_preconditioning_program(self, vin):
         return self.precond_programs.get(vin, DEFAULT_PRECONDITIONING_PROGRAM)
 
     def schedule_delivery(self, vin, programs, sent_at):
         """SCHEDULE_CONFIRMED once the car reports these programs after sent_at (a time.time() value),
-        SCHEDULE_FAILED if it answered the request with an error, SCHEDULE_WAKING while they wait for the car to wake
-        and SCHEDULE_WAITING until it answers."""
+        SCHEDULE_FAILED if it answered the request with an error, SCHEDULE_WAKING while they wait for the car to wake,
+        SCHEDULE_NOT_WOKEN if it didn't, so they weren't sent, and SCHEDULE_WAITING until it answers."""
         reported_at, reported = self.car_programs.get(vin, (0, None))
         if reported_at >= sent_at and same_preconditioning_programs(reported, programs):
             return SCHEDULE_CONFIRMED
         if self._waiting_for_wakeup(vin):
             return SCHEDULE_WAKING
+        if self._not_woken(vin, sent_at):
+            return SCHEDULE_NOT_WOKEN
         replied_at, return_code = self.precond_replies.get(vin, (0, None))
         if replied_at >= sent_at and return_code != "0":
             return SCHEDULE_FAILED

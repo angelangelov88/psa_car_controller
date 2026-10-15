@@ -7,6 +7,7 @@ get/set_preconditioning_program) and reuses the shared Mokka theme in
 assets/zz_mokka_theme.css. No new car logic lives here.
 """
 import logging
+import threading
 import time
 
 import dash_bootstrap_components as dbc
@@ -16,7 +17,8 @@ from dash.exceptions import PreventUpdate
 
 from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, RateLimitException, same_preconditioning_programs
 from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM
-from psa_car_controller.psa.RemoteClient import SCHEDULE_CONFIRMED, SCHEDULE_FAILED, SCHEDULE_WAKING
+from psa_car_controller.psa.RemoteClient import SCHEDULE_CONFIRMED, SCHEDULE_FAILED, SCHEDULE_NOT_WOKEN, \
+    SCHEDULE_WAKING
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view.schedule_form import HOUR_OPTIONS, UNSET_HOUR, minute_options, programs_from_form
@@ -39,6 +41,8 @@ STATUS_UPDATE_TIMEOUT_S = 180
 STATUS_FRESH_WAIT_S = 30
 # A value from the car's clock counts as new if it's at most this much older than the Update click.
 STATUS_CLOCK_SLACK_S = 120
+# The fetch from the server running for Update, by vin, see _fetch_status_in_background
+STATUS_FETCHES = {}
 
 
 def _get_car():
@@ -301,13 +305,16 @@ def toggle_precond(value):
     if value and battery_too_low_to_precondition(_battery_level(car)):
         return html.Span(_too_low_text(_battery_level(car)) + " Nothing sent.", className="mk-err")
     try:
-        APP.myp.remote_client.preconditioning(car.vin, bool(value))
+        published = APP.myp.remote_client.preconditioning(car.vin, bool(value))
     except Exception:  # pylint: disable=broad-except
         logger.exception("toggle_precond:")
+        published = False
+    if not published:
         return html.Span("Couldn't reach the car. Try again in a moment.", className="mk-err")
     if value:
-        return html.Span("Sent — the car should start preconditioning shortly.", className="mk-ok")
-    return html.Span("Sent — preconditioning turned off.", className="mk-ok")
+        return html.Span("Sent — the car should start preconditioning within a couple of minutes "
+                         "(longer if it has to be woken first).", className="mk-ok")
+    return html.Span("Sent — preconditioning will turn off within a couple of minutes.", className="mk-ok")
 
 
 def _sched_done(message, confirmed=None):
@@ -337,6 +344,9 @@ def _check_delivery(pending):
     state = APP.myp.remote_client.schedule_delivery(car.vin, pending["programs"], pending["sent_at"])
     if state == SCHEDULE_CONFIRMED:
         return _sched_done("Done — the car has the new schedules.", pending["programs"])
+    if state == SCHEDULE_NOT_WOKEN:
+        return _sched_done("The car didn't wake up, so the schedules weren't sent. It may be out of signal; "
+                           "try again in a few minutes.")
     if state == SCHEDULE_FAILED:
         return _sched_done("The car didn't take the schedules. It may be out of signal; try again in a few minutes.")
     if time.time() - pending["sent_at"] > SCHEDULE_CONFIRM_TIMEOUT_S:
@@ -433,22 +443,34 @@ def _status_is_new(status, asked_at):
     return updated_at is not None and updated_at.timestamp() >= asked_at - STATUS_CLOCK_SLACK_S
 
 
+def _fetch_status_in_background(vin):
+    """Gets the car's values from the server into car.status, one fetch at a time. A fetch takes several seconds,
+    longer than SCHEDULE_POLL_MS, and Dash drops a poll's answer once the next poll starts, so polls mustn't wait."""
+    fetch = STATUS_FETCHES.get(vin)
+    if fetch is not None and fetch.is_alive():
+        return
+    fetch = threading.Thread(target=APP.myp.get_vehicle_info, args=(vin,), daemon=True)
+    STATUS_FETCHES[vin] = fetch
+    fetch.start()
+
+
 def _check_status_update(pending):
     car = _get_car()
     if not pending or car is None:
         return _update_done("No car found.")
     asked_at = pending["asked_at"]
     if not APP.myp.remote_client.heard_since(car.vin, asked_at):
-        if time.time() - asked_at > STATUS_UPDATE_TIMEOUT_S:
+        timed_out = time.time() - asked_at > STATUS_UPDATE_TIMEOUT_S
+        if timed_out or APP.myp.remote_client.wakeup_failed_since(car.vin, asked_at):
             return _update_done("The car didn't answer. It may be out of signal; try again later.")
         raise PreventUpdate()
     heard_at = pending.get("heard_at") or time.time()
-    status = APP.myp.get_vehicle_info(car.vin)
-    if _status_is_new(status, asked_at):
+    if _status_is_new(car.status, asked_at):
         return _update_done("Up to date.", _status_cards(car), ok=True)
     if time.time() - heard_at > STATUS_FRESH_WAIT_S:
         return _update_done("The car answered, but its new values haven't reached the server yet. "
                             "Try again in a minute.", _status_cards(car))
+    _fetch_status_in_background(car.vin)
     if pending.get("heard_at"):
         raise PreventUpdate()
     return no_update, _busy_label("Getting the new values…"), True, dict(pending, heard_at=heard_at), False, no_update

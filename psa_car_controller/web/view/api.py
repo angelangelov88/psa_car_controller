@@ -89,6 +89,12 @@ def preconditioning(vin, activate):
     return jsonify(APP.myp.remote_client.preconditioning(vin, activate))
 
 
+# How the last /preconditioning command went, see RemoteClient.preconditioning_result. Home Assistant polls it.
+@app.route('/preconditioning_result/<string:vin>')
+def preconditioning_result(vin):
+    return jsonify(APP.myp.remote_client.preconditioning_result(vin))
+
+
 # Read (GET) or set (POST) the four preconditioning schedules. The POST body is
 # a JSON object with program1..program4, each {day:[7], hour, minute, on}.
 @app.route('/preconditioning_program/<string:vin>', methods=['GET', 'POST'])

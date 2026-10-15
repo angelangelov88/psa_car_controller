@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 from paho.mqtt.client import MQTTMessage
 
 from psa_car_controller.common.utils import RateLimitException, same_preconditioning_programs
-from psa_car_controller.psa.RemoteClient import (MQTT_EVENT_TOPIC, MQTT_RESP_TOPIC, SCHEDULE_CONFIRMED,
-                                                 SCHEDULE_FAILED, SCHEDULE_WAITING, SCHEDULE_WAKING, WAKEUP_WAIT_S,
-                                                 RemoteClient)
+from psa_car_controller.psa.RemoteClient import (MQTT_EVENT_TOPIC, MQTT_RESP_TOPIC, PRECOND_NONE,
+                                                 SCHEDULE_CONFIRMED, SCHEDULE_FAILED, SCHEDULE_NOT_WOKEN,
+                                                 SCHEDULE_WAITING, SCHEDULE_WAKING, WAKEUP_WAIT_S, RemoteClient)
 from psa_car_controller.psa.connected_car_api import Vehicles
 from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM
 from psa_car_controller.web.view.schedule_form import HOUR_OPTIONS, minute_options, programs_from_form
@@ -151,6 +151,7 @@ class TestKeptSchedules(unittest.TestCase):
 
         # WHEN the app starts again and preconditioning is turned on before the car sends anything
         client = remote_client(self.file)
+        client.car_heard["VIN"] = time.time()  # awake, so the command goes straight away
         client.preconditioning("VIN", True)
 
         # THEN the car's schedules are sent back with it, not empty ones that would wipe them
@@ -286,11 +287,38 @@ class TestWakeBeforeSending(unittest.TestCase):
         self.client._on_mqtt_message(None, None, reply("VIN", "0", request="VehCharge/state"))
         self.assertEqual(sent_schedules(self.client), [CAR_PROGRAMS])
 
-    def test_they_still_go_when_the_wakeup_fails(self):
-        # the server then tries to wake the car itself, as before
+    def test_they_dont_go_when_the_car_doesnt_answer_the_wakeup(self):
+        # on 2026-10-15 schedules sent after a timed out wakeup timed out too, 2.5 minutes later
         self.client.set_preconditioning_program("VIN", CAR_PROGRAMS)
         self.client._on_mqtt_message(None, None, reply("VIN", "300", request="VehCharge/state"))
+        self.assertEqual(sent_schedules(self.client), [])
+        self.assertEqual(self.client.schedule_delivery("VIN", CAR_PROGRAMS, self.sent_at), SCHEDULE_NOT_WOKEN)
+        # nor when the car wakes by itself later
+        self.client._on_mqtt_message(None, None, event_with_programs("VIN", CAR_PROGRAMS))
+        self.assertEqual(sent_schedules(self.client), [])
+
+    def test_an_earlier_failed_wakeup_doesnt_count(self):
+        self.client.wake_replies["VIN"] = (time.time() - 10, "300")
+        self.client.set_preconditioning_program("VIN", CAR_PROGRAMS)
+        self.assertEqual(self.client.schedule_delivery("VIN", CAR_PROGRAMS, self.sent_at), SCHEDULE_WAKING)
+        self.client._on_mqtt_message(None, None, reply("VIN", "0", request="VehCharge/state"))
         self.assertEqual(sent_schedules(self.client), [CAR_PROGRAMS])
+
+    def test_a_save_after_one_the_car_didnt_wake_for_wakes_it_again(self):
+        self.client.set_preconditioning_program("VIN", CAR_PROGRAMS)
+        self.client._on_mqtt_message(None, None, reply("VIN", "300", request="VehCharge/state"))
+        later = time.time()
+        self.client.set_preconditioning_program("VIN", CAR_PROGRAMS)
+        self.assertEqual(self.client.wakeup.call_count, 2)
+        self.assertEqual(self.client.schedule_delivery("VIN", CAR_PROGRAMS, later), SCHEDULE_WAKING)
+
+    def test_wakeup_failed_since(self):
+        self.assertFalse(self.client.wakeup_failed_since("VIN", self.sent_at))
+        self.client._on_mqtt_message(None, None, reply("VIN", "0", request="VehCharge/state"))
+        self.assertFalse(self.client.wakeup_failed_since("VIN", self.sent_at))
+        self.client._on_mqtt_message(None, None, reply("VIN", "300", request="VehCharge/state"))
+        self.assertTrue(self.client.wakeup_failed_since("VIN", self.sent_at))
+        self.assertFalse(self.client.wakeup_failed_since("VIN", time.time() + 1))
 
     def test_an_expired_token_answer_to_the_wakeup_keeps_them_waiting(self):
         # "400" means the token had expired: the wakeup is sent again, so its answer is still to come
@@ -308,8 +336,8 @@ class TestWakeBeforeSending(unittest.TestCase):
     def test_schedules_are_not_sent_long_after_the_save(self):
         # GIVEN a save whose wakeup never got an answer
         self.client.set_preconditioning_program("VIN", CAR_PROGRAMS)
-        queued_at, request = self.client.after_wakeup["VIN"]
-        self.client.after_wakeup["VIN"] = (queued_at - WAKEUP_WAIT_S - 1, request)
+        queued_at, requests = self.client.after_wakeup["VIN"]
+        self.client.after_wakeup["VIN"] = (queued_at - WAKEUP_WAIT_S - 1, requests)
         # WHEN the car wakes hours later
         self.client._on_mqtt_message(None, None, event_with_programs("VIN", CAR_PROGRAMS))
         # THEN the old schedules aren't sent, and the page stops showing "Waking the car"
@@ -327,11 +355,90 @@ class TestWakeBeforeSending(unittest.TestCase):
         self.assertFalse(self.client.set_preconditioning_program("VIN", CAR_PROGRAMS))
         self.assertNotEqual(self.client.schedule_delivery("VIN", CAR_PROGRAMS, self.sent_at), SCHEDULE_WAKING)
 
+    def test_a_save_and_a_preconditioning_share_one_wakeup(self):
+        # WHEN the tag is tapped while a save is still waking the car
+        self.client.set_preconditioning_program("VIN", CAR_PROGRAMS)
+        self.assertTrue(self.client.preconditioning("VIN", True))
+        # THEN the car is woken once, and both go when it answers
+        self.client.wakeup.assert_called_once_with("VIN")
+        self.client._on_mqtt_message(None, None, reply("VIN", "0", request="VehCharge/state"))
+        self.assertEqual(sent_schedules(self.client), [CAR_PROGRAMS, CAR_PROGRAMS])
+
     def test_heard_since(self):
         self.assertFalse(self.client.heard_since("VIN", self.sent_at))
         self.client._on_mqtt_message(None, None, event_with_programs("VIN", CAR_PROGRAMS))
         self.assertTrue(self.client.heard_since("VIN", self.sent_at))
         self.assertFalse(self.client.heard_since("VIN", time.time() + 1))
+
+
+@patch("psa_car_controller.psa.RemoteClient.threading.Thread", InlineThread)
+class TestPreconditioningResult(unittest.TestCase):
+    """What Home Assistant's NFC tag automation polls after it turns preconditioning on or off."""
+
+    def setUp(self):
+        self.client = remote_client()
+
+    def state(self):
+        return self.client.preconditioning_result("VIN")["state"]
+
+    def test_nothing_sent_yet(self):
+        self.assertEqual(self.client.preconditioning_result("VIN"), {"state": PRECOND_NONE})
+
+    def test_a_sleeping_car_is_woken_first(self):
+        self.assertTrue(self.client.preconditioning("VIN", True))
+        self.client.wakeup.assert_called_once_with("VIN")
+        self.assertEqual(sent_schedules(self.client), [])
+        self.assertEqual(self.state(), SCHEDULE_WAKING)
+
+    def test_sent_once_the_car_wakes(self):
+        self.client.preconditioning("VIN", True)
+        self.client._on_mqtt_message(None, None, reply("VIN", "0", request="VehCharge/state"))
+        self.assertEqual(len(sent_schedules(self.client)), 1)
+        self.assertEqual(self.state(), SCHEDULE_WAITING)
+
+    def test_confirmed_when_the_car_accepts_it(self):
+        self.client.car_heard["VIN"] = time.time()
+        self.client.preconditioning("VIN", False)
+        self.client._on_mqtt_message(None, None, reply("VIN", "0"))
+        result = self.client.preconditioning_result("VIN")
+        self.assertEqual(result["state"], SCHEDULE_CONFIRMED)
+        self.assertFalse(result["activate"])
+
+    def test_failed_with_the_servers_code(self):
+        # e.g. 300 when the car didn't answer, as on 2026-10-15
+        self.client.car_heard["VIN"] = time.time()
+        self.client.preconditioning("VIN", True)
+        self.client._on_mqtt_message(None, None, reply("VIN", "300"))
+        result = self.client.preconditioning_result("VIN")
+        self.assertEqual((result["state"], result["return_code"]), (SCHEDULE_FAILED, "300"))
+
+    def test_an_answer_to_an_earlier_command_doesnt_count(self):
+        self.client._on_mqtt_message(None, None, reply("VIN", "0"))
+        self.client.precond_replies["VIN"] = (time.time() - 10, "0")
+        self.client.preconditioning("VIN", True)
+        self.assertEqual(self.state(), SCHEDULE_WAITING)
+
+    def test_failed_when_the_car_never_woke(self):
+        self.client.preconditioning("VIN", True)
+        queued_at, requests = self.client.after_wakeup["VIN"]
+        self.client.after_wakeup["VIN"] = (queued_at - WAKEUP_WAIT_S - 1, requests)
+        # an event long after doesn't send it either
+        self.client._on_mqtt_message(None, None, event_with_programs("VIN", CAR_PROGRAMS))
+        self.assertEqual(sent_schedules(self.client), [])
+        result = self.client.preconditioning_result("VIN")
+        self.assertEqual((result["state"], result["return_code"]), (SCHEDULE_FAILED, None))
+
+    def test_failed_when_the_car_doesnt_answer_the_wakeup(self):
+        self.client.preconditioning("VIN", True)
+        self.client._on_mqtt_message(None, None, reply("VIN", "300", request="VehCharge/state"))
+        self.assertEqual(sent_schedules(self.client), [])
+        result = self.client.preconditioning_result("VIN")
+        self.assertEqual((result["state"], result["return_code"]), (SCHEDULE_FAILED, None))
+
+    def test_failed_when_it_couldnt_be_sent(self):
+        self.client.publish.return_value = False
+        self.assertFalse(self.client.preconditioning("VIN", True))
+        self.assertEqual(self.state(), SCHEDULE_FAILED)
 
 
 if __name__ == '__main__':
