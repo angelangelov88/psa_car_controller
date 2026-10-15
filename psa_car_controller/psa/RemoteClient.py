@@ -47,6 +47,8 @@ PRECOND_NONE = "none"
 # within WAKEUP_WAIT_S. Waiting any longer could send it hours later, when the user no longer expects it. A car that
 # doesn't answer the wakeup isn't sent it at all: at 17:39 that day schedules sent after a timed out wakeup timed out
 # too, so sending them only kept the user waiting another 2.5 minutes for the same answer.
+# They wait for the wakeup's answer, not the car's first event: at 19:34 and 20:38 that day schedules sent on the
+# event, a second before the answer, were told the car was asleep and timed out although it was awake.
 AWAKE_WINDOW_S = 60
 WAKEUP_WAIT_S = 180
 MQTT_EVENT_TOPIC = "psa/RemoteServices/events/MPHRTServices/"
@@ -163,7 +165,6 @@ class RemoteClient:
                     self._remember_precond_programs(data["vin"], programs)
                 self._store_lock_state(data)
                 self.car_heard[data["vin"]] = time.time()
-                self._send_after_wakeup(data["vin"])
         except KeyError:
             logger.exception("on_mqtt_message:")
 

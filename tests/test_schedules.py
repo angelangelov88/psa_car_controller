@@ -275,10 +275,13 @@ class TestWakeBeforeSending(unittest.TestCase):
         self.assertEqual(sent_schedules(self.client), [CAR_PROGRAMS])
         self.assertEqual(self.client.schedule_delivery("VIN", CAR_PROGRAMS, self.sent_at), SCHEDULE_WAITING)
 
-    def test_the_schedules_go_when_the_waking_car_sends_an_event(self):
-        # On 2026-10-15 the car's events came a few seconds before its answer to the wakeup
+    def test_the_schedules_wait_for_the_wakeups_answer_not_the_cars_first_event(self):
+        # On 2026-10-15 schedules sent on the event, a second before the answer, were told the car was asleep
         self.client.set_preconditioning_program("VIN", CAR_PROGRAMS)
         self.client._on_mqtt_message(None, None, event_with_programs("VIN", dict(CAR_PROGRAMS, program1=OFF)))
+        self.assertEqual(sent_schedules(self.client), [])
+        self.assertEqual(self.client.schedule_delivery("VIN", CAR_PROGRAMS, self.sent_at), SCHEDULE_WAKING)
+        self.client._on_mqtt_message(None, None, reply("VIN", "0", request="VehCharge/state"))
         self.assertEqual(sent_schedules(self.client), [CAR_PROGRAMS])
 
     def test_they_are_sent_once(self):
