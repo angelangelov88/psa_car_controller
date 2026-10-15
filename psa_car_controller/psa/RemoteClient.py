@@ -14,8 +14,8 @@ from psa_car_controller.psacc.model.car import Cars
 from psa_car_controller.psa.AccountInformation import AccountInformation
 from psa_car_controller.psa.connected_car_api.models.doors_state import DoorsState
 from psa_car_controller.psa.RemoteCredentials import RemoteCredentials
-from psa_car_controller.psa.constants import INPROGRESS, DEFAULT_PRECONDITIONING_PROGRAM, IMMEDIATE_CHARGE, \
-    DELAYED_CHARGE, REMOTE_URL
+from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM, IMMEDIATE_CHARGE, DELAYED_CHARGE, \
+    REMOTE_URL
 from psa_car_controller.psa.mqtt_request import MQTTRequest
 from psa_car_controller.psa.oauth import OpenIdCredentialManager
 from psa_car_controller.common.utils import RateLimitException, rate_limit, parse_hour, TIMEOUT_IN_S, \
@@ -116,7 +116,6 @@ class RemoteClient:
         try:
             logger.info("mqtt msg received: %s %s", msg.topic, msg.payload)
             data = json.loads(msg.payload)
-            charge_info = None
             if msg.topic.startswith(MQTT_RESP_TOPIC):
                 if "return_code" not in data:
                     logger.debug("mqtt msg hasn't return code")
@@ -134,13 +133,11 @@ class RemoteClient:
                 if msg.topic.endswith("/ThermalPrecond") and data.get("return_code") not in (None, "400"):
                     self.precond_replies[data["vin"]] = (time.time(), data["return_code"])
             elif msg.topic.startswith(MQTT_EVENT_TOPIC):
-                charge_info = data["charging_state"]
                 programs = data["precond_state"].get("programs", None)
                 if programs:
                     self.car_programs[data["vin"]] = (time.time(), programs)
                     self._remember_precond_programs(data["vin"], programs)
                 self._store_lock_state(data)
-            self._fix_not_updated_api(charge_info, data["vin"])
         except KeyError:
             logger.exception("on_mqtt_message:")
 
@@ -178,18 +175,6 @@ class RemoteClient:
             car.status.doors_state = DoorsState()
         car.status.doors_state.locked_state = [lock_state]
         logger.debug("lock state of %s set from mqtt: %s", car.vin, lock_state)
-
-    def _fix_not_updated_api(self, charge_info, vin):
-        if charge_info is not None and (charge_info.get('remaining_time', 0) != 0 or charge_info.get('rate', 0) != 0):
-            try:
-                car = self.vehicles_list.get_car_by_vin(vin=vin)
-                if car and car.status.get_energy('Electric').charging.status != INPROGRESS:
-                    # fix a psa server bug where charge beginning without status api being properly updated
-                    logger.warning("charge begin but API isn't updated")
-                    time.sleep(60)
-                    self.wakeup(vin)
-            except (IndexError, AttributeError, RateLimitException):
-                logger.exception("on_mqtt_message:")
 
     def start(self):
         if self.load_otp():
@@ -283,6 +268,10 @@ class RemoteClient:
                     logger.debug("refresh_remote_token: %s", data)
                     if "access_token" in data:
                         self.remoteCredentials.access_token = data["access_token"]
+                        # The reply usually has no new refresh token, and only setting one used to restart the
+                        # TTL, so every publish refreshed again: about 3 s each, and 6 of them used up
+                        # refresh_token_now()'s limit for half an hour.
+                        self.remoteCredentials.last_update = datetime.now()
                         bad_remote_token = False
                         if "refresh_token" in data:
                             self.remoteCredentials.refresh_token = data["refresh_token"]

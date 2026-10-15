@@ -203,6 +203,8 @@ def get_home_layout():
         reported = APP.myp.remote_client.reported_preconditioning_program(vin) if vin else None
     except (AttributeError, TypeError):
         programs = DEFAULT_PRECONDITIONING_PROGRAM
+    # What the car itself says beats what was last sent: a save it never confirmed would otherwise look applied.
+    programs = reported or programs
     shown = {key: programs.get(key, DEFAULT_PRECONDITIONING_PROGRAM[key]) for key in PRECOND_PROGRAM_KEYS}
 
     schedule_rows = [_schedule_row(i, shown[key]) for i, key in enumerate(PRECOND_PROGRAM_KEYS)]
@@ -356,20 +358,35 @@ def save_schedules(n_clicks, n_intervals, pending, ons, hours, minutes, days):  
             {"sent_at": sent_at, "programs": programs}, False, no_update)
 
 
+# Sending takes a few seconds, so the button changes in the browser straight away, which also stops a second click
+# sending the schedules twice (the server rejects that as a duplicate). save_schedules' answer replaces it.
+dash_app.clientside_callback(
+    """function() {
+        const spinner = {namespace: "dash_html_components", type: "Span",
+                         props: {className: "spinner-border spinner-border-sm me-2", "aria-hidden": "true"}};
+        return [true, [spinner, "Sending…"]];
+    }""",
+    Output("mokka-sched-save", "disabled", allow_duplicate=True),
+    Output("mokka-sched-save", "children", allow_duplicate=True),
+    Input("mokka-sched-save", "n_clicks"),
+    prevent_initial_call=True)
+
+
 @dash_app.callback(
     Output("mokka-sched-save", "disabled", allow_duplicate=True),
+    Output("mokka-sched-status", "children", allow_duplicate=True),
     Input({"type": "mk-sched-on", "index": ALL}, "value"),
     Input({"type": "mk-sched-hour", "index": ALL}, "value"),
     Input({"type": "mk-sched-minute", "index": ALL}, "value"),
     Input({"type": "mk-sched-days", "index": ALL}, "value"),
     State("mokka-sched-car", "data"),
-    State("mokka-sched-pending", "data"),
+    State("mokka-sched-save", "children"),
     prevent_initial_call=True)
-def update_save_button(ons, hours, minutes, days, reported, pending):
+def update_save_button(ons, hours, minutes, days, reported, label):
     """Save is off while the form matches what the car last reported. A form that can't be sent stays clickable,
-    so Save can say what to fix."""
+    so Save can say what to fix. The last save's message goes, as it's about the form before this change."""
     # pylint: disable=too-many-arguments,too-many-positional-arguments  # Dash passes each input and state in turn
-    if pending:
-        raise PreventUpdate()  # the button shows "Waiting for the car…" until it answers
+    if label != SAVE_LABEL:
+        raise PreventUpdate()  # the button shows "Sending…" or "Waiting for the car…" until the car answers
     programs, problem = programs_from_form(ons, hours, minutes, days)
-    return not problem and same_preconditioning_programs(programs, reported)
+    return not problem and same_preconditioning_programs(programs, reported), None

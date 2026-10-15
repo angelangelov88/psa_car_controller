@@ -34,20 +34,23 @@ message_without_charge_info = b'{"date":"2022-03-30T13:18:56Z","etat_res_elec":5
 
 class TestUnit(unittest.TestCase):
 
-    @patch('time.sleep', return_value=None)
-    def test_fix_not_updated_api(self, patched_time_sleep):
-        # GIVEN
+    @patch('time.sleep')
+    def test_charging_event_does_not_wake_the_car(self, patched_time_sleep):
+        # GIVEN a car the status api still shows as not charging
         remote_client = get_rc()
-        vin = "myvin"
         car = Car("a", "b", "c")
         car.status = ApiClient()._ApiClient__deserialize(ELECTRIC_CAR_STATUS, "Status")
         car.status.get_energy('Electric').charging.status = DISCONNECTED
         remote_client.vehicles_list.get_car_by_vin = MagicMock(return_value=car)
         remote_client.wakeup = MagicMock()
-        # WHEN
-        remote_client._fix_not_updated_api({'remaining_time': 1}, vin)
-        # THEN
-        remote_client.wakeup.assert_called_once_with(vin)
+        msg = MQTTMessage(topic=MQTT_EVENT_TOPIC.encode("utf-8"))
+        msg.payload = message_without_precond.replace(b'"remaining_time":0', b'"remaining_time":1')
+        # WHEN the car says it's charging
+        remote_client._on_mqtt_message(None, None, msg)
+        # THEN it isn't woken again, and the mqtt thread isn't held up (waking every minute until the api caught up
+        # never helped, blocked the connection's keepalive and got the car throttled)
+        remote_client.wakeup.assert_not_called()
+        patched_time_sleep.assert_not_called()
 
     def test_message_without_precond(self):
         remote_client = get_rc()

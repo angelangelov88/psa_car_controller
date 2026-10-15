@@ -76,6 +76,19 @@ class TestRefreshRemoteToken(unittest.TestCase):
         self.assertTrue(refreshed)
         remote_client.manager.refresh_token_now.assert_not_called()
 
+    def test_a_refreshed_token_is_reused_without_a_new_refresh_token(self):
+        # GIVEN a remote client that just refreshed its token, with a reply that had no new refresh token
+        remote_client = get_remote_client()
+        remote_client._refresh_remote_token()
+        remote_client.manager.refresh_token_now.reset_mock()
+
+        # WHEN another message is published a moment later
+        refreshed = remote_client._refresh_remote_token()
+
+        # THEN the token is reused: refreshing before every publish took ~3 s and used up the rate limit
+        self.assertTrue(refreshed)
+        remote_client.manager.refresh_token_now.assert_not_called()
+
     def test_restart_soon_after_a_refresh_still_signs_in_to_mqtt(self):
         # GIVEN a remote client whose token was refreshed a moment ago (as when the setup screens
         # sign in and then restart remote control after the SMS step)
