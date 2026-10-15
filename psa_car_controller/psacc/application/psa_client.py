@@ -13,7 +13,7 @@ from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psacc.model.car import Cars, Car
 from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psa.AccountInformation import AccountInformation
-from psa_car_controller.psa.RemoteClient import RemoteClient
+from psa_car_controller.psa.RemoteClient import PRECOND_PROGRAMS_FILE, RemoteClient
 from psa_car_controller.psa.RemoteCredentials import RemoteCredentials
 from psa_car_controller.psa.oauth import OpenIdCredentialManager, Oauth2PSACCApiConfig, OauthAPIClient
 from .ecomix import Ecomix
@@ -81,6 +81,7 @@ class PSAClient:
                                           self.vehicles_list,
                                           self.manager,
                                           remote_credentials)
+        self.remote_client.keep_programs_in(PRECOND_PROGRAMS_FILE)
 
     def get_app_name(self):
         return realm_info[self.realm]['app_name']

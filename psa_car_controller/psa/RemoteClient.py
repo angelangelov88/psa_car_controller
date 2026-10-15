@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 from os import environ
@@ -17,7 +18,8 @@ from psa_car_controller.psa.constants import INPROGRESS, DEFAULT_PRECONDITIONING
     DELAYED_CHARGE, REMOTE_URL
 from psa_car_controller.psa.mqtt_request import MQTTRequest
 from psa_car_controller.psa.oauth import OpenIdCredentialManager
-from psa_car_controller.common.utils import RateLimitException, rate_limit, parse_hour, TIMEOUT_IN_S
+from psa_car_controller.common.utils import RateLimitException, rate_limit, parse_hour, TIMEOUT_IN_S, \
+    validate_preconditioning_programs
 from psa_car_controller.psa.otp.otp import ConfigException, save_otp, load_otp
 
 logger = logging.getLogger(__name__)
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 MQTT_DOORS_LOCKING_STATE = {1: "Locked", 3: "Unlocked"}
 MQTT_SERVER = "mwa.mpsa.com"
 MQTT_RESP_TOPIC = "psa/RemoteServices/to/cid/"
+# The car only sends its weekly preconditioning schedules when it wakes, so the last ones seen are kept here
+# across restarts. Without them a preconditioning command would send empty schedules and wipe the car's.
+PRECOND_PROGRAMS_FILE = "precond_programs.json"
 MQTT_EVENT_TOPIC = "psa/RemoteServices/events/MPHRTServices/"
 MQTT_TOKEN_TTL = 890
 # minimum delay between two remote token refresh attempts: the broker closes the socket without
@@ -62,6 +67,7 @@ class RemoteClient:
         self.vehicles_list = vehicles_list
         self.remoteCredentials: RemoteCredentials = remoteCredentials
         self.manager = manager
+        self.programs_file: Optional[str] = None
         self.precond_programs = {}
         self.lock_state = {}
         self.account_info = account_info
@@ -121,7 +127,7 @@ class RemoteClient:
                 charge_info = data["charging_state"]
                 programs = data["precond_state"].get("programs", None)
                 if programs:
-                    self.precond_programs[data["vin"]] = data["precond_state"]["programs"]
+                    self._remember_precond_programs(data["vin"], programs)
                 self._store_lock_state(data)
             self._fix_not_updated_api(charge_info, data["vin"])
         except KeyError:
@@ -370,6 +376,41 @@ class RemoteClient:
     def get_preconditioning_program(self, vin):
         return self.precond_programs.get(vin, DEFAULT_PRECONDITIONING_PROGRAM)
 
+    def has_preconditioning_program(self, vin):
+        """True once the car's schedules are known: seen from the car, sent to it, or kept from a previous run."""
+        return vin in self.precond_programs
+
+    def keep_programs_in(self, programs_file):
+        """Keep the schedules in this file from now on, starting with the ones saved there by a previous run."""
+        self.programs_file = programs_file
+        self.precond_programs = self._load_precond_programs()
+
+    def _load_precond_programs(self):
+        if not os.path.isfile(self.programs_file):
+            return {}
+        try:
+            with open(self.programs_file, encoding="utf-8") as file:
+                saved = json.load(file)
+            return {vin: validate_preconditioning_programs(programs) for vin, programs in saved.items()}
+        except (OSError, ValueError, TypeError, AttributeError):
+            logger.warning("Ignoring unreadable %s", self.programs_file)
+            return {}
+
+    def _remember_precond_programs(self, vin, programs):
+        # The car repeats its schedules in every event while it's awake; only a change needs saving.
+        if self.precond_programs.get(vin) == programs:
+            return
+        self.precond_programs[vin] = programs
+        if not self.programs_file:
+            return
+        temp_file = self.programs_file + ".tmp"
+        try:
+            with open(temp_file, "w", encoding="utf-8") as file:
+                json.dump(self.precond_programs, file)
+            os.replace(temp_file, self.programs_file)
+        except OSError:
+            logger.exception("Couldn't save %s", self.programs_file)
+
     def set_preconditioning_program(self, vin, programs):
         # Push the schedule to the car. "asap": "deactivate" updates the stored
         # programs without starting an immediate preconditioning session. Record
@@ -381,7 +422,7 @@ class RemoteClient:
         logger.info("set_preconditioning_program: %s", msg)
         published = self.publish(msg)
         if published:
-            self.precond_programs[vin] = programs
+            self._remember_precond_programs(vin, programs)
         return published
 
     def load_otp(self, force_new=False):

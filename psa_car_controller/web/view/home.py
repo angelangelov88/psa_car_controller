@@ -13,10 +13,11 @@ from dash import dcc, html, ALL
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
-from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, validate_preconditioning_programs
+from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS
 from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.web.app import dash_app
+from psa_car_controller.web.view.schedule_form import HOUR_OPTIONS, UNSET_HOUR, minute_options, programs_from_form
 from psa_car_controller.web.view.status_text import (MIN_PRECOND_BATTERY, battery_too_low_to_precondition,
                                                      car_state_text, charge_power_kw, charging_text, format_mileage,
                                                      format_power, format_rate, format_updated, map_embed_url,
@@ -135,13 +136,24 @@ def _too_low_text(battery):
     return f"Battery is {battery}%. Preconditioning needs at least {MIN_PRECOND_BATTERY}%."
 
 
+def _labelled(text, index, field):
+    # The label wraps the dropdown, which names it for screen readers; dbc.Select takes no aria props.
+    return html.Label(className="w-100", children=[
+        html.Span(className="mk-mini-label d-block", children=[
+            text, html.Span(f" for schedule {index + 1}", className="visually-hidden")]),
+        field,
+    ])
+
+
 def _schedule_row(index, program):
     day = program.get("day", [0] * 7)
     hour = program.get("hour", 34)
     minute = program.get("minute", 0)
     on = program.get("on", 0)
-    # hour 34 is the car's "unset" sentinel; show it as an empty field.
-    hour_value = None if hour == 34 else hour
+    # hour 34 is the car's "unset" sentinel; show it as "Not set". Its minute means nothing, so show :00.
+    hour_value = "" if hour == UNSET_HOUR else str(hour)
+    if hour == UNSET_HOUR:
+        minute = 0
 
     return html.Div(className="mk-sched-row", children=[
         html.Div(className="mk-sched-head", children=[
@@ -151,14 +163,12 @@ def _schedule_row(index, program):
         ]),
         dbc.Row(className="g-2 align-items-end", children=[
             dbc.Col(xs=6, md=3, children=[
-                dbc.Label("Hour", className="mk-mini-label"),
-                dbc.Input(id={"type": "mk-sched-hour", "index": index}, type="number",
-                          min=0, max=23, step=1, value=hour_value, placeholder="0-23"),
+                _labelled("Hour", index, dbc.Select(id={"type": "mk-sched-hour", "index": index},
+                                                    options=HOUR_OPTIONS, value=hour_value)),
             ]),
             dbc.Col(xs=6, md=3, children=[
-                dbc.Label("Minute", className="mk-mini-label"),
-                dbc.Input(id={"type": "mk-sched-minute", "index": index}, type="number",
-                          min=0, max=59, step=1, value=minute, placeholder="0-59"),
+                _labelled("Minute", index, dbc.Select(id={"type": "mk-sched-minute", "index": index},
+                                                      options=minute_options(minute), value=str(minute))),
             ]),
             dbc.Col(xs=12, md=6, children=[
                 dbc.Label("Days", className="mk-mini-label"),
@@ -178,10 +188,12 @@ def _schedule_row(index, program):
 
 def get_home_layout():
     car = _get_car()
+    programs_known = False
     try:
         vin = car.vin if car else None
         programs = APP.myp.remote_client.get_preconditioning_program(vin) if vin \
             else DEFAULT_PRECONDITIONING_PROGRAM
+        programs_known = bool(vin) and APP.myp.remote_client.has_preconditioning_program(vin)
     except (AttributeError, TypeError):
         programs = DEFAULT_PRECONDITIONING_PROGRAM
 
@@ -217,6 +229,9 @@ def get_home_layout():
         html.H3("Weekly schedules", className="mk-section-title"),
         html.Div("Changes apply the next time the car is awake — not always straight away.",
                  className="mokka-subtitle"),
+        html.Div(
+            "The car hasn't sent its schedules yet, so these may not match it. Saving replaces all four.",
+            className="mk-err mb-2", role="note") if not programs_known else None,
         html.Div(schedule_rows),
 
         html.Div(className="mk-save-row", children=[
@@ -277,24 +292,9 @@ def save_schedules(n_clicks, ons, hours, minutes, days):  # pylint: disable=unus
     if car is None:
         return html.Span("No car found.", className="mk-err")
 
-    programs = {}
-    for i, key in enumerate(PRECOND_PROGRAM_KEYS):
-        selected = days[i] or []
-        day = [1 if d in selected else 0 for d in range(7)]
-        try:
-            hour = int(hours[i]) if hours[i] not in (None, "") else 34
-        except (ValueError, TypeError):
-            hour = 34
-        try:
-            minute = int(minutes[i]) if minutes[i] not in (None, "") else 0
-        except (ValueError, TypeError):
-            minute = 0
-        programs[key] = {"day": day, "hour": hour, "minute": minute, "on": 1 if ons[i] else 0}
-
-    try:
-        programs = validate_preconditioning_programs(programs)
-    except (ValueError, TypeError) as error:
-        return html.Span(str(error), className="mk-err")
+    programs, problem = programs_from_form(ons, hours, minutes, days)
+    if problem:
+        return html.Span(problem, className="mk-err")
 
     try:
         published = APP.myp.remote_client.set_preconditioning_program(car.vin, programs)
