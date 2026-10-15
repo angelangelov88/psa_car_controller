@@ -18,7 +18,9 @@ from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view.status_text import (MIN_PRECOND_BATTERY, battery_too_low_to_precondition,
-                                                     format_mileage)
+                                                     car_state_text, charge_power_kw, charging_text, format_mileage,
+                                                     format_power, format_rate, format_updated, map_embed_url,
+                                                     map_link_url, position, precond_failure_text, precond_text)
 
 logger = logging.getLogger(__name__)
 
@@ -32,38 +34,89 @@ def _get_car():
     return vehicles[0] if vehicles else None
 
 
-def _status_value(getter, default="—"):
-    """Read a car-status field, returning a dash placeholder on any gap."""
+def _read(getter):
+    """Read a car-status field; None on any gap, as the car leaves many fields out."""
     try:
-        value = getter()
-        return "—" if value is None else value
+        return getter()
     except (AttributeError, TypeError, KeyError, IndexError):
-        return default
+        return None
 
 
-def _stat_tile(label, value):
+def _stat_tile(label, value, sub=None):
     return dbc.Col(html.Div(className="mk-tile", children=[
         html.Div(label, className="mk-tile-label"),
-        html.Div(value, className="mk-tile-value"),
+        html.Div("—" if value is None else value, className="mk-tile-value"),
+        html.Div(sub, className="mk-tile-sub") if sub else None,
     ]), xs=6, md=3)
+
+
+def _when_known(value, text):
+    """text(value), or None when the car didn't send the value."""
+    return text(value) if value is not None else None
+
+
+def _charging_rate_tile(car, energy):
+    rate = _read(lambda: energy.charging.charging_rate)
+    if _read(lambda: energy.charging.status) != "InProgress" or not rate:
+        return _stat_tile("Charging rate", None)
+    power = charge_power_kw(rate, car.battery_power, energy.level, energy.autonomy)
+    return _stat_tile("Charging rate", format_power(power) if power else format_rate(rate),
+                      format_rate(rate) if power else None)
+
+
+def _precond_tile(status):
+    ac = _read(lambda: status.preconditionning.air_conditioning)
+    state = _read(lambda: ac.status)
+    failure = _read(lambda: ac.failure_cause) if state == "Failure" else None
+    return _stat_tile("Preconditioning", precond_text(state), _when_known(failure, precond_failure_text))
+
+
+def _car_position(car):
+    return position(_read(lambda: car.status.last_position.geometry.coordinates))
+
+
+def _location_section(car):
+    latlon = _car_position(car)
+    if latlon is None:
+        return None
+    seen_at = format_updated(_read(lambda: car.status.last_position.properties.updated_at))
+    return html.Details(id="mokka-location", className="mk-details", children=[
+        html.Summary("Location"),
+        # Filled in when the section is first opened, so Google only gets the car's position on request.
+        html.Div(id="mokka-map"),
+        html.Div(className="mk-map-foot", children=[
+            html.Span(f"Position from {seen_at}" if seen_at else None),
+            html.A("Open in Google Maps", href=map_link_url(*latlon), target="_blank", rel="noopener noreferrer"),
+        ]),
+    ])
 
 
 def _status_cards(car):
     if car is None or car.status is None:
         return html.Div("Car status isn't available yet.", className="mokka-subtitle")
 
-    battery = _status_value(lambda: car.status.get_energy('Electric').level)
-    mileage = _status_value(lambda: format_mileage(car.status.timed_odometer.mileage))
-    precond = _status_value(
-        lambda: "On" if car.status.preconditionning.air_conditioning.status != "Disabled" else "Off")
-    charging = _status_value(
-        lambda: "Charging" if car.status.get_energy('Electric').charging.status == "InProgress" else "Not charging")
+    status = car.status
+    energy = _read(lambda: status.get_energy('Electric'))
+    updated = format_updated(_read(lambda: energy.updated_at))
 
-    return dbc.Row(className="g-2 mb-3", children=[
-        _stat_tile("Battery", f"{battery}%" if battery != "—" else "—"),
-        _stat_tile("Mileage", mileage),
-        _stat_tile("Preconditioning", precond),
-        _stat_tile("Charging", charging),
+    return html.Div([
+        html.Div(f"Updated {updated}" if updated else None, className="mokka-subtitle mk-updated"),
+        dbc.Row(className="g-2 mb-3", children=[
+            _stat_tile("Battery", _when_known(_read(lambda: energy.level), lambda v: f"{v:g}%"),
+                       _when_known(_read(lambda: energy.autonomy), lambda v: f"{format_mileage(v)} range")),
+            _stat_tile("Charging", charging_text(_read(lambda: energy.charging.plugged),
+                                                 _read(lambda: energy.charging.status),
+                                                 _read(lambda: energy.charging.remaining_time))),
+            _charging_rate_tile(car, energy),
+            _precond_tile(status),
+            _stat_tile("Outside", _when_known(_read(lambda: status.environment.air.temp), lambda v: f"{v:g} °C")),
+            _stat_tile("Mileage", _when_known(_read(lambda: status.timed_odometer.mileage), format_mileage)),
+            _stat_tile("Car", car_state_text(_read(lambda: status.ignition.type), _read(lambda: status.kinetic.moving),
+                                             _read(lambda: status.kinetic.speed))),
+            _stat_tile("Battery health", _when_known(_read(lambda: energy.battery.health.resistance),
+                                                     lambda v: f"{v:g}%")),
+        ]),
+        _location_section(car),
     ])
 
 
@@ -75,7 +128,7 @@ def _precond_on_state(car):
 
 
 def _battery_level(car):
-    return _status_value(lambda: car.status.get_energy('Electric').level, default=None)
+    return _read(lambda: car.status.get_energy('Electric').level)
 
 
 def _too_low_text(battery):
@@ -171,6 +224,21 @@ def get_home_layout():
             dbc.Button("Save schedules", id="mokka-sched-save", color="primary"),
         ]),
     ])
+
+
+@dash_app.callback(
+    Output("mokka-map", "children"),
+    Input("mokka-location", "n_clicks"),
+    State("mokka-map", "children"),
+    prevent_initial_call=True)
+def show_map(n_clicks, shown):
+    if not n_clicks or shown:
+        raise PreventUpdate()
+    latlon = _car_position(_get_car())
+    if latlon is None:
+        return html.Span("Location isn't available.", className="mk-err")
+    return html.Iframe(src=map_embed_url(*latlon), title="Map of the car's location", className="mk-map",
+                       referrerPolicy="no-referrer")
 
 
 @dash_app.callback(

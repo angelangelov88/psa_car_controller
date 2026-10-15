@@ -507,3 +507,54 @@ body .dash-dropdown-trigger {
 .mokka-panel h1.visually-hidden + h2.mk-section-title {
   margin-top: 0;
 }
+
+/* Car status: second line in a tile, "Updated" time and the Location section with its map. */
+.mk-tile-sub {
+  font-size: 0.75rem;
+  color: var(--mk-muted);
+  margin-top: 0.15rem;
+}
+.mokka-panel .mk-updated {
+  margin-top: -0.5rem;
+}
+.mk-details {
+  background-color: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius);
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 1rem;
+}
+.mk-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--mk-strong);
+  border-radius: 0.25rem;
+}
+.mk-details > summary:focus-visible {
+  outline: 2px solid var(--mk-accent);
+  outline-offset: 2px;
+}
+.mk-map {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: var(--mk-radius);
+  margin-top: 0.75rem;
+}
+.mk-map-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--mk-muted);
+}
+.mk-map-foot a {
+  color: var(--mk-accent);
+}
+.mk-map-foot a:focus-visible {
+  outline: 2px solid var(--mk-accent);
+  outline-offset: 2px;
+}
