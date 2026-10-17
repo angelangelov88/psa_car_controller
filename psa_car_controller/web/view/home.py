@@ -17,8 +17,8 @@ from dash.exceptions import PreventUpdate
 
 from psa_car_controller.common.utils import PRECOND_PROGRAM_KEYS, RateLimitException, same_preconditioning_programs
 from psa_car_controller.psa.constants import DEFAULT_PRECONDITIONING_PROGRAM
-from psa_car_controller.psa.RemoteClient import SCHEDULE_CONFIRMED, SCHEDULE_FAILED, SCHEDULE_NOT_WOKEN, \
-    SCHEDULE_WAKING
+from psa_car_controller.psa.RemoteClient import SCHEDULE_CAR_ON, SCHEDULE_CONFIRMED, SCHEDULE_FAILED, \
+    SCHEDULE_NOT_WOKEN, SCHEDULE_WAKING
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view.schedule_form import HOUR_OPTIONS, UNSET_HOUR, minute_options, programs_from_form
@@ -347,6 +347,8 @@ def _check_delivery(pending):
     if state == SCHEDULE_NOT_WOKEN:
         return _sched_done("The car didn't wake up, so the schedules weren't sent. It may be out of signal; "
                            "try again in a few minutes.")
+    if state == SCHEDULE_CAR_ON:
+        return _sched_done("The car is switched on, so it refused the schedules. Try again after you switch it off.")
     if state == SCHEDULE_FAILED:
         return _sched_done("The car didn't take the schedules. It may be out of signal; try again in a few minutes.")
     if time.time() - pending["sent_at"] > SCHEDULE_CONFIRM_TIMEOUT_S:

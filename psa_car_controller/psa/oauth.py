@@ -2,6 +2,7 @@ import logging
 import hashlib
 import secrets
 import base64
+import threading
 import time
 from typing import Tuple
 
@@ -41,6 +42,8 @@ class OpenIdCredentialManager(CredentialManager):
         self.refresh_callbacks = []
         self.code_verifier = None
         self.redirect_uri = None
+        self._refresh_lock = threading.Lock()
+        self._refresh_count = 0
 
     def _grant_password_request_realm(self, login: str, password: str, realm: str) -> dict:
         return {"grant_type": 'password', "username": login, "scope": ' '.join(self.service_information.scopes),
@@ -74,8 +77,21 @@ class OpenIdCredentialManager(CredentialManager):
     def access_token(self):
         return self._access_token
 
-    @rate_limit(6, 1800)
     def refresh_token_now(self):
+        # One refresh at a time: each one spends the refresh token. On 2026-10-17 the mqtt reconnect and a 401 on the
+        # status refreshed together when the PC woke from standby, and the second, sending the token the first had
+        # just spent, got invalid_grant. A call that waited while another refreshed uses that one's new token.
+        count_when_asked = self._refresh_count
+        with self._refresh_lock:
+            if self._refresh_count != count_when_asked:
+                return True
+            refreshed = self._refresh_token_limited()
+            if refreshed:
+                self._refresh_count += 1
+            return refreshed
+
+    @rate_limit(6, 1800)
+    def _refresh_token_limited(self):
         # The PSA token endpoint sometimes drops the connection without a
         # response (RemoteDisconnected), leaving the caller with a stale
         # token that then fails every API call with 401 until the next
