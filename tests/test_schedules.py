@@ -501,6 +501,40 @@ class TestPreconditioningResult(unittest.TestCase):
         result = self.client.preconditioning_result("VIN")
         self.assertEqual((result["state"], result["return_code"]), (SCHEDULE_FAILED, "300"))
 
+    def test_confirmed_by_the_cars_event_despite_a_timeout(self):
+        # GIVEN a start sent to a sleeping car, as on 2026-10-21
+        self.client.preconditioning("VIN", True)
+        self.client._on_mqtt_message(None, None, car_event("VIN", precond_state={"asap": 0, "status": 0}))
+        self.client._on_mqtt_message(None, None, reply("VIN", "0", request="VehCharge/state"))
+        self.assertEqual(self.state(), SCHEDULE_WAITING)
+        # WHEN the car reports preconditioning on, and the server later says it timed out
+        self.client._on_mqtt_message(None, None, car_event("VIN", precond_state={"asap": 1, "status": 1}))
+        self.assertEqual(self.state(), SCHEDULE_CONFIRMED)
+        self.client._on_mqtt_message(None, None, reply("VIN", "300"))
+        # THEN it's still confirmed
+        self.assertEqual(self.state(), SCHEDULE_CONFIRMED)
+
+    def test_a_stop_is_confirmed_when_the_car_reports_it_off(self):
+        self.client.car_heard["VIN"] = time.time()
+        self.client.preconditioning("VIN", False)
+        self.client._on_mqtt_message(None, None, car_event("VIN", precond_state={"asap": 1}))
+        self.assertEqual(self.state(), SCHEDULE_WAITING)
+        self.client._on_mqtt_message(None, None, car_event("VIN", precond_state={"asap": 0}))
+        self.assertEqual(self.state(), SCHEDULE_CONFIRMED)
+
+    def test_an_event_from_before_the_command_doesnt_confirm_it(self):
+        self.client._on_mqtt_message(None, None, car_event("VIN", precond_state={"asap": 1}))
+        self.client.car_precond_on["VIN"] = (time.time() - 10, True)
+        self.client.preconditioning("VIN", True)
+        self.client._on_mqtt_message(None, None, reply("VIN", "300"))
+        self.assertEqual(self.state(), SCHEDULE_FAILED)
+
+    def test_events_without_preconditioning_dont_confirm_it(self):
+        self.client.car_heard["VIN"] = time.time()
+        self.client.preconditioning("VIN", False)
+        self.client._on_mqtt_message(None, None, car_event("VIN"))
+        self.assertEqual(self.state(), SCHEDULE_WAITING)
+
     def test_an_answer_to_an_earlier_command_doesnt_count(self):
         self.client._on_mqtt_message(None, None, reply("VIN", "0"))
         self.client.precond_replies["VIN"] = (time.time() - 10, "0")

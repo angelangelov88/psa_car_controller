@@ -129,6 +129,10 @@ class RemoteClient:
         self.signal = {}
         # (time, activate, request or None if it couldn't be sent) of the last preconditioning(), by vin
         self.precond_sent = {}
+        # (time.time() it arrived, preconditioning on) from the car's latest event that said, by vin. On 2026-10-21
+        # precond_state.asap went to 1 in an event 7 s after a start reached the car, and back to 0 when it stopped,
+        # while the server answered that start with a 300 timeout 2 minutes later. So the event confirms a command.
+        self.car_precond_on = {}
         self.lock_state = {}
         self.account_info = account_info
         self.headers = {
@@ -197,6 +201,8 @@ class RemoteClient:
                 if programs:
                     self.car_programs[data["vin"]] = (time.time(), programs)
                     self._remember_precond_programs(data["vin"], programs)
+                if "asap" in data["precond_state"]:
+                    self.car_precond_on[data["vin"]] = (time.time(), data["precond_state"]["asap"] == 1)
                 self._store_lock_state(data)
                 self._store_car_on(data)
                 self._store_signal(data)
@@ -512,9 +518,10 @@ class RemoteClient:
     def preconditioning_result(self, vin):
         """Where the last preconditioning() for this car stands, for Home Assistant to poll: "state" is PRECOND_NONE
         before any, SCHEDULE_WAKING while it waits for the car to wake, SCHEDULE_WAITING once sent until the car
-        answers, then SCHEDULE_CONFIRMED or SCHEDULE_FAILED. A failure has the server's "return_code", or none if the
-        command never left: it couldn't be sent, or the car didn't wake for it. A refusal also says whether it was
-        because the car is switched on ("car_on")."""
+        answers, then SCHEDULE_CONFIRMED or SCHEDULE_FAILED. It's confirmed by the server's answer, or by an event
+        from the car showing preconditioning on (or off), whatever the server answers. A failure has the server's
+        "return_code", or none if the command never left: it couldn't be sent, or the car didn't wake for it. A refusal
+        also says whether it was because the car is switched on ("car_on")."""
         if vin not in self.precond_sent:
             return {"state": PRECOND_NONE}
         sent_at, activate, request = self.precond_sent[vin]
@@ -526,6 +533,9 @@ class RemoteClient:
             if self._waiting_for_wakeup(vin):
                 return dict(result, state=SCHEDULE_WAKING)
             return dict(result, state=SCHEDULE_FAILED, return_code=None)
+        reported_at, precond_on = self.car_precond_on.get(vin, (0, None))
+        if reported_at >= sent_at and precond_on == bool(activate):
+            return dict(result, state=SCHEDULE_CONFIRMED)
         if replied_at < sent_at:
             return dict(result, state=SCHEDULE_WAITING)
         if return_code == "0":
