@@ -17,6 +17,8 @@ PRECOND_FAILURE_CAUSES = {
     "WindowsRoofOpened": "Window or roof open",
 }
 IGNITION_ON = ("Start", "StartUp")
+# The car's signal_quality runs from 0 to SIGNAL_MAX
+SIGNAL_MAX = 5
 
 
 def _is_number(value):
@@ -107,6 +109,14 @@ def car_state_text(ignition, moving, speed_kmh):
     if ignition is not None:
         return "Parked"
     return None
+
+
+def signal_text(quality, seen_at=None):
+    """'Signal 4/5 at 11:44' from the car's latest event, or None without one. seen_at is a datetime."""
+    if not _is_number(quality):
+        return None
+    when = format_updated(seen_at)
+    return f"Signal {quality:g}/{SIGNAL_MAX}" + (f" at {when}" if when else "")
 
 
 def format_updated(updated_at, now=None):

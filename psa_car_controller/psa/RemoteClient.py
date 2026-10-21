@@ -78,6 +78,14 @@ MAX_REFRESH_DELAY = 120
 KEEPALIVE_PERIOD = 3600 * 8
 
 
+def _event_time(data):
+    """time.time() value of the car's own date on an event, or None without a valid one."""
+    try:
+        return datetime.fromisoformat(data["date"].replace("Z", "+00:00")).timestamp()
+    except (KeyError, AttributeError, ValueError):
+        return None
+
+
 def refused_car_on(data) -> bool:
     """True for a car's answer refusing a request because it's switched on."""
     return data.get("return_code") == CAR_ON_RETURN_CODE and (data.get("resp_data") or {}).get("error") == CAR_ON_ERROR
@@ -117,6 +125,8 @@ class RemoteClient:
         # /ThermalPrecond request for being switched on, by vin
         self.car_on = {}
         self.precond_refused_car_on = {}
+        # (time of the car's event, signal_quality 0 to 5) from its latest event that had one, by vin
+        self.signal = {}
         # (time, activate, request or None if it couldn't be sent) of the last preconditioning(), by vin
         self.precond_sent = {}
         self.lock_state = {}
@@ -189,20 +199,27 @@ class RemoteClient:
                     self._remember_precond_programs(data["vin"], programs)
                 self._store_lock_state(data)
                 self._store_car_on(data)
+                self._store_signal(data)
                 self.car_heard[data["vin"]] = time.time()
         except KeyError:
             logger.exception("on_mqtt_message:")
 
     def _store_car_on(self, data):
         # Events can arrive out of order, so only one dated after the latest seen counts.
-        if "sev_state" not in data or "date" not in data:
-            return
-        try:
-            event_time = datetime.fromisoformat(data["date"].replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            return
-        if event_time >= self.car_on.get(data["vin"], (0, False))[0]:
+        event_time = _event_time(data)
+        if "sev_state" in data and event_time is not None and event_time >= self.car_on.get(data["vin"], (0,))[0]:
             self.car_on[data["vin"]] = (event_time, data["sev_state"] != 0)
+
+    def _store_signal(self, data):
+        # Stellantis doesn't document signal_quality, but it's 0 to 5 like a phone's bars and not part of the
+        # position. It shows how well the car could reach the network when it last spoke, as wakeups need that.
+        event_time = _event_time(data)
+        if "signal_quality" in data and event_time is not None and event_time >= self.signal.get(data["vin"], (0,))[0]:
+            self.signal[data["vin"]] = (event_time, data["signal_quality"])
+
+    def last_signal(self, vin):
+        """(time of the car's event, signal quality 0 to 5) from its latest event that had one, or None."""
+        return self.signal.get(vin)
 
     def car_switched_on(self, vin):
         """True while the car's latest event says it's switched on, unless that event is too old to trust."""

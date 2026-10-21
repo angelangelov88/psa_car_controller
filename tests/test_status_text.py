@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from psa_car_controller.web.view.status_text import (battery_too_low_to_precondition, car_state_text, charge_power_kw,
                                                      charging_text, format_duration, format_mileage, format_power,
                                                      format_rate, format_updated, map_embed_url, map_link_url,
-                                                     position, precond_failure_text, precond_text)
+                                                     position, precond_failure_text, precond_text, signal_text)
 
 
 class TestStatusText(unittest.TestCase):
@@ -131,6 +131,20 @@ class TestUpdatedAndPosition(unittest.TestCase):
                          "https://maps.google.com/maps?q=51.500000,-0.100000&z=16&output=embed")
         self.assertEqual(map_link_url(51.5, -0.1),
                          "https://www.google.com/maps/search/?api=1&query=51.500000,-0.100000")
+
+
+class TestSignal(unittest.TestCase):
+
+    def test_signal_with_the_time_the_car_reported_it(self):
+        seen_at = datetime.now(timezone.utc)
+        self.assertEqual(signal_text(4, seen_at), f"Signal 4/5 at {seen_at.astimezone():%H:%M}")
+
+    def test_signal_without_a_time(self):
+        self.assertEqual(signal_text(3), "Signal 3/5")
+
+    def test_no_signal_reported(self):
+        self.assertIsNone(signal_text(None))
+        self.assertIsNone(signal_text("—"))
 
 
 if __name__ == '__main__':

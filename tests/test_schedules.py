@@ -57,11 +57,40 @@ def car_on_refusal(vin, request="ThermalPrecond"):
 
 
 def event_with_ignition(vin, sev_state, minutes_ago=0):
+    return car_event(vin, minutes_ago, sev_state=sev_state)
+
+
+def car_event(vin, minutes_ago=0, **fields):
     msg = MQTTMessage(topic=MQTT_EVENT_TOPIC.encode("utf-8"))
     date = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
-    msg.payload = json.dumps({"vin": vin, "date": date.strftime("%Y-%m-%dT%H:%M:%SZ"), "sev_state": sev_state,
-                              "charging_state": {}, "precond_state": {}}).encode()
+    msg.payload = json.dumps(dict({"vin": vin, "date": date.strftime("%Y-%m-%dT%H:%M:%SZ"), "charging_state": {},
+                                   "precond_state": {}}, **fields)).encode()
     return msg
+
+
+class TestCarSignal(unittest.TestCase):
+
+    def setUp(self):
+        self.client = remote_client()
+
+    def test_the_latest_events_signal_is_kept(self):
+        # GIVEN the car reported a signal of 2, then 4
+        self.client._on_mqtt_message(None, None, car_event("VIN", minutes_ago=30, signal_quality=2))
+        self.client._on_mqtt_message(None, None, car_event("VIN", minutes_ago=5, signal_quality=4))
+        # THEN the later one is shown, with the car's time for it
+        seen_at, quality = self.client.last_signal("VIN")
+        self.assertEqual(quality, 4)
+        self.assertAlmostEqual(seen_at, time.time() - 5 * 60, delta=60)
+
+    def test_an_older_event_arriving_late_doesnt_count(self):
+        self.client._on_mqtt_message(None, None, car_event("VIN", minutes_ago=5, signal_quality=4))
+        self.client._on_mqtt_message(None, None, car_event("VIN", minutes_ago=300, signal_quality=1))
+        self.assertEqual(self.client.last_signal("VIN")[1], 4)
+
+    def test_nothing_before_the_car_reports_one(self):
+        self.assertIsNone(self.client.last_signal("VIN"))
+        self.client._on_mqtt_message(None, None, car_event("VIN"))
+        self.assertIsNone(self.client.last_signal("VIN"))
 
 
 class TestScheduleForm(unittest.TestCase):

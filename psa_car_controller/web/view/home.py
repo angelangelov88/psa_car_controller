@@ -9,6 +9,7 @@ assets/zz_mokka_theme.css. No new car logic lives here.
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 
 import dash_bootstrap_components as dbc
 from dash import ALL, ctx, dcc, html, no_update
@@ -25,7 +26,8 @@ from psa_car_controller.web.view.schedule_form import HOUR_OPTIONS, UNSET_HOUR, 
 from psa_car_controller.web.view.status_text import (MIN_PRECOND_BATTERY, battery_too_low_to_precondition,
                                                      car_state_text, charge_power_kw, charging_text, format_mileage,
                                                      format_power, format_rate, format_updated, map_embed_url,
-                                                     map_link_url, position, precond_failure_text, precond_text)
+                                                     map_link_url, position, precond_failure_text, precond_text,
+                                                     signal_text)
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +97,14 @@ def _precond_tile(status):
     return _stat_tile("Preconditioning", precond_text(state), _when_known(failure, precond_failure_text))
 
 
+def _signal_text(car):
+    last = _read(lambda: APP.myp.remote_client.last_signal(car.vin))
+    if not last:
+        return None
+    seen_at, quality = last
+    return signal_text(quality, datetime.fromtimestamp(seen_at, timezone.utc))
+
+
 def _car_position(car):
     return position(_read(lambda: car.status.last_position.geometry.coordinates))
 
@@ -136,7 +146,8 @@ def _status_cards(car):
             _stat_tile("Outside", _when_known(_read(lambda: status.environment.air.temp), lambda v: f"{v:g} °C")),
             _stat_tile("Mileage", _when_known(_read(lambda: status.timed_odometer.mileage), format_mileage)),
             _stat_tile("Car", car_state_text(_read(lambda: status.ignition.type), _read(lambda: status.kinetic.moving),
-                                             _read(lambda: status.kinetic.speed))),
+                                             _read(lambda: status.kinetic.speed)),
+                       _signal_text(car)),
             _stat_tile("Battery health", _when_known(_read(lambda: energy.battery.health.resistance),
                                                      lambda v: f"{v:g}%")),
         ]),
