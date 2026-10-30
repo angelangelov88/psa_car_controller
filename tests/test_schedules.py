@@ -554,6 +554,19 @@ class TestPreconditioningResult(unittest.TestCase):
         return [call.args[0].req_parameters["asap"] for call in self.client.publish.call_args_list
                 if call.args[0] != "wakeup"]
 
+    def publish_for_real(self):
+        """Requests go through RemoteClient.publish, so each send gets its correlation_id, to an mqtt stand-in."""
+        client = self.client
+        client.account_info.get_mqtt_customer_id.return_value = "cid"
+        client.remoteCredentials = MagicMock(access_token="token")
+        client.mqtt_client = MagicMock()
+        client._refresh_remote_token = MagicMock(return_value=True)
+        client.publish = MagicMock(side_effect=lambda request, store=True: RemoteClient.publish(client, request, store))
+        client.wakeup = MagicMock(return_value=True)
+
+    def sent_id(self):
+        return self.client.precond_sent["VIN"][2].data["correlation_id"]
+
     def state(self):
         return self.client.preconditioning_result("VIN")["state"]
 
@@ -624,9 +637,54 @@ class TestPreconditioningResult(unittest.TestCase):
 
     def test_an_answer_to_an_earlier_command_doesnt_count(self):
         self.client._on_mqtt_message(None, None, reply("VIN", "0"))
-        self.client.precond_replies["VIN"] = (time.time() - 10, "0")
         self.client.preconditioning("VIN", True)
         self.assertEqual(self.state(), SCHEDULE_WAITING)
+
+    def test_an_answer_to_the_previous_command_after_this_one_doesnt_count(self):
+        # GIVEN a stop sent, then a start waiting for the car to wake, as on 2026-10-30 at 15:37
+        self.publish_for_real()
+        self.client.car_heard["VIN"] = time.time()
+        self.client.preconditioning("VIN", False)
+        stop_id = self.sent_id()
+        self.client.car_heard["VIN"] = 0
+        self.client.preconditioning("VIN", True)
+        # WHEN the stop's 300 comes a second later, and the start goes anyway after two wakeups
+        self.client._on_mqtt_message(None, None, reply("VIN", "300", correlation_id=stop_id))
+        self.not_answered()
+        self.not_answered()
+        # THEN the start waits for its own answer
+        self.assertEqual(self.sent_asaps(), ["deactivate", "activate"])
+        self.assertEqual(self.state(), SCHEDULE_WAITING)
+
+    def test_the_answer_to_this_command_counts(self):
+        self.publish_for_real()
+        self.client.car_heard["VIN"] = time.time()
+        self.client.preconditioning("VIN", True)
+        self.client._on_mqtt_message(None, None, reply("VIN", "300", correlation_id=self.sent_id()))
+        result = self.client.preconditioning_result("VIN")
+        self.assertEqual((result["state"], result["return_code"]), (SCHEDULE_FAILED, "300"))
+
+    def test_the_answer_to_the_first_send_counts_after_it_was_sent_again(self):
+        self.publish_for_real()
+        self.client.car_heard["VIN"] = time.time()
+        self.client.preconditioning("VIN", True)
+        first_id = self.sent_id()
+        HeldTimer.run_all()
+        self.assertEqual(self.sent_asaps(), ["activate", "activate"])
+        self.assertNotEqual(self.sent_id(), first_id)
+        self.client._on_mqtt_message(None, None, reply("VIN", "0", correlation_id=first_id))
+        self.assertEqual(self.state(), SCHEDULE_CONFIRMED)
+
+    def test_a_refusal_for_the_previous_command_isnt_this_ones(self):
+        self.publish_for_real()
+        self.client.car_heard["VIN"] = time.time()
+        self.client.preconditioning("VIN", True)
+        start_id = self.sent_id()
+        self.client.preconditioning("VIN", False)
+        self.client._on_mqtt_message(None, None, reply("VIN", "500", resp_data={"error": 4}, correlation_id=start_id))
+        self.assertEqual(self.state(), SCHEDULE_WAITING)
+        self.client._on_mqtt_message(None, None, reply("VIN", "300", correlation_id=self.sent_id()))
+        self.assertFalse(self.client.preconditioning_result("VIN")["car_on"])
 
     def test_failed_when_the_car_never_woke(self):
         self.client.preconditioning("VIN", True)
