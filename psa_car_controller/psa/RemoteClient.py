@@ -52,6 +52,20 @@ PRECOND_NONE = "none"
 # event, a second before the answer, were told the car was asleep and timed out although it was awake.
 AWAKE_WINDOW_S = 60
 WAKEUP_WAIT_S = 180
+# The server answers a wakeup the car doesn't answer with a 300 about 2.5 minutes later, as on 2026-10-25 and at 13:01
+# on 2026-10-30, while a tap at 13:07 woke it straight away. So one more wakeup goes before giving up, and once the car
+# hasn't answered WAKEUP_TRIES of them a preconditioning goes anyway: it may still get through, and
+# preconditioning_result checks the car's status for it. Schedules still don't, as above.
+WAKEUP_TRIES = 2
+# On 2026-10-30 at 12:44 a preconditioning sent once the car woke got nothing back from the server, not even the
+# ProcessManagement message it acknowledges a request with within seconds. One that isn't acknowledged within
+# PRECOND_ACK_WAIT_S is sent once more.
+PRECOND_ACK_WAIT_S = 30
+# The car's status from the rest api confirms a preconditioning too, when it shows it on (or off) as of at most
+# PRECOND_STATUS_SLACK_S before the command, which allows for the car's clock being a little behind.
+PRECOND_STATUS_SLACK_S = 30
+PRECOND_ON_STATUSES = ("Enabled",)
+PRECOND_OFF_STATUSES = ("Disabled", "Finished")
 # A switched-on car is awake, so requests go without a wakeup. Its events say whether it's on: on 2026-10-16
 # sev_state was 1 or 2 in every event from start to stop of three drives, and 0 while it was parked. Each time it
 # was switched off it sent a sev_state 0 event within seconds, so CAR_ON_TRUST_S only matters when that one is lost.
@@ -119,6 +133,10 @@ class RemoteClient:
         # time.time() the car last answered or sent an event, and (time, request) to send once it wakes, by vin
         self.car_heard = {}
         self.after_wakeup = {}
+        # (wakeups sent, wakeups the car didn't answer) for the requests in after_wakeup, by vin
+        self.queue_wakeups = {}
+        # the last wakeup request sent, by vin: its correlation_id tells its answer from another wakeup's
+        self.last_wakeup = {}
         # (time, answered) of the last answer to a wakeup by vin: answered is False when the car didn't answer it
         self.wake_replies = {}
         # (time of the car's event, switched on) from its latest event, and time.time() it last refused a
@@ -129,6 +147,10 @@ class RemoteClient:
         self.signal = {}
         # (time, activate, request or None if it couldn't be sent) of the last preconditioning(), by vin
         self.precond_sent = {}
+        # the correlation_id of the server's last acknowledgement of that preconditioning, and the request if it was
+        # sent again for want of one, by vin
+        self.precond_acked = {}
+        self.precond_resent = {}
         # (time.time() it arrived, preconditioning on) from the car's latest event that said, by vin. On 2026-10-21
         # precond_state.asap went to 1 in an event 7 s after a start reached the car, and back to 0 when it stopped,
         # while the server answered that start with a 300 timeout 2 minutes later. So the event confirms a command.
@@ -173,6 +195,7 @@ class RemoteClient:
             logger.info("mqtt msg received: %s %s", msg.topic, msg.payload)
             data = json.loads(msg.payload)
             if msg.topic.startswith(MQTT_RESP_TOPIC):
+                self._note_precond_acknowledgement(data)
                 if "return_code" not in data:
                     logger.debug("mqtt msg hasn't return code")
                 elif data["return_code"] == "400":
@@ -193,9 +216,7 @@ class RemoteClient:
                     if refused_car_on(data):
                         self.precond_refused_car_on[data["vin"]] = time.time()
                 if msg.topic.endswith("/VehCharge/state") and data.get("return_code") not in (None, "400"):
-                    answered = data["return_code"] == "0" or refused_car_on(data)
-                    self.wake_replies[data["vin"]] = (time.time(), answered)
-                    self._send_after_wakeup(data["vin"])
+                    self._on_wakeup_reply(data)
             elif msg.topic.startswith(MQTT_EVENT_TOPIC):
                 programs = data["precond_state"].get("programs", None)
                 if programs:
@@ -209,6 +230,17 @@ class RemoteClient:
                 self.car_heard[data["vin"]] = time.time()
         except KeyError:
             logger.exception("on_mqtt_message:")
+
+    def _on_wakeup_reply(self, data):
+        answered = data["return_code"] == "0" or refused_car_on(data)
+        # any answer means the car is awake, but only the last wakeup's error means it didn't wake
+        if not answered and not self._answers_last_wakeup(data):
+            return
+        self.wake_replies[data["vin"]] = (time.time(), answered)
+        if answered:
+            self._send_after_wakeup(data["vin"])
+        else:
+            self._wakeup_not_answered(data["vin"])
 
     def _store_car_on(self, data):
         # Events can arrive out of order, so only one dated after the latest seen counts.
@@ -436,7 +468,15 @@ class RemoteClient:
         logger.info("ask wakeup to %s", vin)
         msg = self.mqtt_request(vin, {"action": "state"}, "/VehCharge/state")
         logger.info(msg)
+        self.last_wakeup[vin] = msg
         return self.publish(msg)
+
+    def _answers_last_wakeup(self, data):
+        """False for an answer to another wakeup than the last one sent: the server answers one sent while another is
+        on its way with an error straight away. Without both correlation_ids to compare it counts."""
+        sent = self.last_wakeup.get(data["vin"])
+        sent_id = sent.data.get("correlation_id") if sent is not None else None
+        return not sent_id or not data.get("correlation_id") or data["correlation_id"] == sent_id
 
     def heard_since(self, vin, since):
         """True once the car has answered or sent an event after since (a time.time() value)."""
@@ -444,21 +484,95 @@ class RemoteClient:
 
     def _publish_when_awake(self, vin, request) -> bool:
         if time.time() - self.car_heard.get(vin, 0) < AWAKE_WINDOW_S or self.car_switched_on(vin):
-            return self.publish(request)
+            return self._publish_checked(request)
         if self._waiting_for_wakeup(vin):
             # a wakeup is already on its way, so this one goes with the others when it gets an answer
             self.after_wakeup[vin][1].append(request)
             return True
         self.after_wakeup[vin] = (time.time(), [request])
+        self.queue_wakeups[vin] = (1, 0)
         try:
             woken = self.wakeup(vin)
         except RateLimitException:
             logger.warning("wakeup limit reached, sending %s to the car without one", request.topic)
             self.after_wakeup.pop(vin, None)
-            return self.publish(request)
+            return self._publish_checked(request)
         if not woken:
             self.after_wakeup.pop(vin, None)
         return woken
+
+    def _wakeup_not_answered(self, vin):
+        if not self._waiting_for_wakeup(vin):
+            return
+        sent, unanswered = self.queue_wakeups.get(vin, (1, 0))
+        if sent < WAKEUP_TRIES:
+            # the wait for the car starts again with the new wakeup
+            _, requests = self.after_wakeup[vin]
+            self.after_wakeup[vin] = (time.time(), requests)
+            self.queue_wakeups[vin] = (sent + 1, unanswered + 1)
+            logger.warning("the car didn't answer the wakeup, trying once more")
+            # Not on the mqtt thread: publish can refresh the token over http, which would hold up the connection.
+            threading.Thread(target=self._wake_again, args=(vin,), daemon=True).start()
+            return
+        self.queue_wakeups[vin] = (sent, unanswered + 1)
+        threading.Thread(target=self._send_precond_unwoken, args=(vin,), daemon=True).start()
+
+    def _wake_again(self, vin):
+        try:
+            woken = self.wakeup(vin)
+        except RateLimitException:
+            woken = False
+        if not woken:
+            sent, _ = self.queue_wakeups.get(vin, (1, 0))
+            self.queue_wakeups[vin] = (sent, sent)
+            self._send_precond_unwoken(vin)
+
+    def _send_precond_unwoken(self, vin):
+        """Sends the preconditioning waiting for a car that didn't wake, see WAKEUP_TRIES. Schedules stay queued, so
+        schedule_delivery can tell they were never sent."""
+        _, requests = self.after_wakeup.get(vin, (0, []))
+        request = self._latest_precond(vin)
+        if request is None or request not in requests:
+            return
+        requests.remove(request)
+        logger.warning("the car didn't wake, sending %s anyway", request.topic)
+        if not self._publish_checked(request):
+            sent_at, activate, _ = self.precond_sent[vin]
+            self.precond_sent[vin] = (sent_at, activate, None)
+
+    def _latest_precond(self, vin):
+        """The last preconditioning() request for this car, or None if there's none or it couldn't be sent."""
+        return self.precond_sent.get(vin, (0, False, None))[2]
+
+    def _publish_checked(self, request) -> bool:
+        """Publishes request, and if it's the latest preconditioning, sends it once more unless the server
+        acknowledges it within PRECOND_ACK_WAIT_S."""
+        published = self.publish(request)
+        if published and request is self._latest_precond(request.vin):
+            timer = threading.Timer(PRECOND_ACK_WAIT_S, self._resend_unacknowledged, args=(request,))
+            timer.daemon = True
+            timer.start()
+        return published
+
+    def _note_precond_acknowledgement(self, data):
+        # Any message about the request counts: the server's ProcessManagement messages come within seconds.
+        request = self._latest_precond(data.get("vin"))
+        correlation_id = data.get("correlation_id")
+        if request is not None and correlation_id and correlation_id == request.data.get("correlation_id"):
+            self.precond_acked[data["vin"]] = correlation_id
+
+    def _resend_unacknowledged(self, request):
+        vin = request.vin
+        if request is not self._latest_precond(vin) or self.precond_resent.get(vin) is request:
+            return
+        correlation_id = request.data.get("correlation_id")
+        if correlation_id and self.precond_acked.get(vin) == correlation_id:
+            return
+        if self.preconditioning_result(vin)["state"] != SCHEDULE_WAITING:
+            return
+        logger.warning("no acknowledgement of %s within %d s, sending it again", request.topic, PRECOND_ACK_WAIT_S)
+        self.precond_resent[vin] = request
+        self.publish(request)
 
     def wakeup_failed_since(self, vin, since):
         """True once a wakeup got an error back after since (a time.time() value): the car didn't answer it."""
@@ -467,7 +581,8 @@ class RemoteClient:
 
     def _waiting_for_wakeup(self, vin):
         queued_at, _ = self.after_wakeup.get(vin, (0, []))
-        return time.time() - queued_at < WAKEUP_WAIT_S and not self.wakeup_failed_since(vin, queued_at)
+        sent, unanswered = self.queue_wakeups.get(vin, (1, 0))
+        return time.time() - queued_at < WAKEUP_WAIT_S and unanswered < sent
 
     def _not_woken(self, vin, since):
         """True when requests queued after since were never sent, because the car didn't wake for them."""
@@ -484,10 +599,11 @@ class RemoteClient:
         if not self._waiting_for_wakeup(vin):
             return
         _, requests = self.after_wakeup.pop(vin)
+        self.queue_wakeups.pop(vin, None)
         for request in requests:
             logger.info("car is awake, sending %s", request.topic)
             # Not on the mqtt thread: publish can refresh the token over http, which would hold up the connection.
-            threading.Thread(target=self.publish, args=(request,), daemon=True).start()
+            threading.Thread(target=self._publish_checked, args=(request,), daemon=True).start()
 
     def lock_door(self, vin, lock: bool):
         if lock:
@@ -511,17 +627,22 @@ class RemoteClient:
             programs = DEFAULT_PRECONDITIONING_PROGRAM
         msg = self.mqtt_request(vin, {"asap": value, "programs": programs}, "/ThermalPrecond")
         logger.info("Preconditioning: %s", msg)
+        # recorded before it goes, so the acknowledgement check knows it's the latest
+        sent_at = time.time()
+        self.precond_sent[vin] = (sent_at, activate, msg)
         published = self._publish_when_awake(vin, msg)
-        self.precond_sent[vin] = (time.time(), activate, msg if published else None)
+        if not published:
+            self.precond_sent[vin] = (sent_at, activate, None)
         return published
 
     def preconditioning_result(self, vin):
         """Where the last preconditioning() for this car stands, for Home Assistant to poll: "state" is PRECOND_NONE
         before any, SCHEDULE_WAKING while it waits for the car to wake, SCHEDULE_WAITING once sent until the car
         answers, then SCHEDULE_CONFIRMED or SCHEDULE_FAILED. It's confirmed by the server's answer, or by an event
-        from the car showing preconditioning on (or off), whatever the server answers. A failure has the server's
-        "return_code", or none if the command never left: it couldn't be sent, or the car didn't wake for it. A refusal
-        also says whether it was because the car is switched on ("car_on")."""
+        from the car or its status from the rest api showing preconditioning on (or off), whatever the server answers,
+        so asking again later can turn a failure into a confirmation. A failure has the server's "return_code", or none
+        if the command never left: it couldn't be sent, or no wakeup got an answer in time. A refusal also says whether
+        it was because the car is switched on ("car_on")."""
         if vin not in self.precond_sent:
             return {"state": PRECOND_NONE}
         sent_at, activate, request = self.precond_sent[vin]
@@ -534,7 +655,8 @@ class RemoteClient:
                 return dict(result, state=SCHEDULE_WAKING)
             return dict(result, state=SCHEDULE_FAILED, return_code=None)
         reported_at, precond_on = self.car_precond_on.get(vin, (0, None))
-        if reported_at >= sent_at and precond_on == bool(activate):
+        reported = reported_at >= sent_at and precond_on == bool(activate)
+        if reported or self._status_shows_precond(vin, activate, sent_at):
             return dict(result, state=SCHEDULE_CONFIRMED)
         if replied_at < sent_at:
             return dict(result, state=SCHEDULE_WAITING)
@@ -542,6 +664,17 @@ class RemoteClient:
             return dict(result, state=SCHEDULE_CONFIRMED, return_code=return_code)
         return dict(result, state=SCHEDULE_FAILED, return_code=return_code,
                     car_on=self._refused_car_on_since(vin, sent_at))
+
+    def _status_shows_precond(self, vin, activate, since):
+        """True when the car's status from the rest api, refreshed every couple of minutes, shows preconditioning on
+        (or off) as of since, see PRECOND_STATUS_SLACK_S."""
+        try:
+            air_conditioning = self.vehicles_list.get_car_by_vin(vin).status.preconditionning.air_conditioning
+            status, updated_at = air_conditioning.status, air_conditioning.updated_at.timestamp()
+        except (AttributeError, TypeError):
+            return False
+        wanted = PRECOND_ON_STATUSES if activate else PRECOND_OFF_STATUSES
+        return status in wanted and updated_at >= since - PRECOND_STATUS_SLACK_S
 
     def get_preconditioning_program(self, vin):
         return self.precond_programs.get(vin, DEFAULT_PRECONDITIONING_PROGRAM)
