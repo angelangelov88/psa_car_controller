@@ -72,14 +72,19 @@ def charging_text(plugged, status, remaining):
     return None
 
 
-def charge_power_kw(rate_kmh, battery_kwh, level, range_km):
-    """Charging power estimated from the car's charging rate, which is range gained per hour (km/h), times the energy
-    a km currently takes (battery size x level / range). None when a value is missing or zero."""
-    values = (rate_kmh, battery_kwh, level, range_km)
-    if not all(_is_number(v) and v > 0 for v in values):
+def charge_power_kw(battery_kwh, level, remaining):
+    """Charging power estimated as the charge still to add (battery size x missing %) over the car's time to full (an
+    ISO 8601 duration). An average, so a little under the real power near full, where the car slows down. Not the
+    charging rate times the energy a km takes: when the battery is low the car's range is so cautious that this came
+    to over twice the charger's power. None when a value is missing or zero."""
+    try:
+        parts = parse_hour(remaining)
+    except (AttributeError, TypeError, ValueError):
         return None
-    kwh_per_km = battery_kwh * level / 100 / range_km
-    return rate_kmh * kwh_per_km
+    time_h = parts[0] + parts[1] / 60
+    if not (_is_number(battery_kwh) and _is_number(level) and battery_kwh > 0 and level < 100 and time_h > 0):
+        return None
+    return battery_kwh * (100 - level) / 100 / time_h
 
 
 def format_power(kw):

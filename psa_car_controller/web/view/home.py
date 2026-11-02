@@ -85,7 +85,7 @@ def _charging_rate_tile(car, energy):
     rate = _read(lambda: energy.charging.charging_rate)
     if _read(lambda: energy.charging.status) != "InProgress" or not rate:
         return _stat_tile("Charging rate", None)
-    power = charge_power_kw(rate, car.battery_power, energy.level, energy.autonomy)
+    power = charge_power_kw(car.battery_power, energy.level, _read(lambda: energy.charging.remaining_time))
     return _stat_tile("Charging rate", format_power(power) if power else format_rate(rate),
                       format_rate(rate) if power else None)
 

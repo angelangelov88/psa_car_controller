@@ -58,17 +58,24 @@ class TestChargingText(unittest.TestCase):
 
 class TestChargingRate(unittest.TestCase):
 
-    def test_rate_is_turned_into_kw(self):
-        # GIVEN 46 kWh at 75% lasting 202 km (about 0.17 kWh per km) and 40 km of range gained per hour
-        # WHEN the power is estimated THEN it is about 6.8 kW
-        power = charge_power_kw(40, 46, 75, 202)
-        self.assertAlmostEqual(power, 6.83, places=2)
-        self.assertEqual(format_power(power), "≈6.8 kW")
+    def test_power_is_charge_left_over_time_to_full(self):
+        # GIVEN 46 kWh at 23% (35.4 kWh to add) and full in 4 h 50 min, as on 2026-11-01 on the 7.4 kW zappi, when
+        # the car's range was 16 mi and the old estimate from it said 17.1 kW
+        # WHEN the power is estimated THEN it is about 7.3 kW
+        power = charge_power_kw(46, 23, "PT4H50M")
+        self.assertAlmostEqual(power, 7.33, places=2)
+        self.assertEqual(format_power(power), "≈7.3 kW")
 
-    def test_no_estimate_without_range_or_level(self):
-        self.assertIsNone(charge_power_kw(40, 46, 75, 0))
-        self.assertIsNone(charge_power_kw(40, 46, None, 202))
-        self.assertIsNone(charge_power_kw(0, 46, 75, 202))
+    def test_power_with_hours_or_minutes_only(self):
+        self.assertAlmostEqual(charge_power_kw(46, 70, "PT2H"), 6.9)
+        self.assertAlmostEqual(charge_power_kw(46, 90, "PT45M"), 6.13, places=2)
+
+    def test_no_estimate_without_time_or_level(self):
+        self.assertIsNone(charge_power_kw(46, 75, "PT0S"))
+        self.assertIsNone(charge_power_kw(46, 75, None))
+        self.assertIsNone(charge_power_kw(46, None, "PT2H"))
+        self.assertIsNone(charge_power_kw(46, 100, "PT2H"))
+        self.assertIsNone(charge_power_kw(None, 75, "PT2H"))
 
     def test_rate_in_miles(self):
         self.assertEqual(format_rate(40), "+25 mi range per hour")
